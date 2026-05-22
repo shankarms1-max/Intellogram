@@ -242,10 +242,14 @@ export default function AccountsPage() {
   async function handleSync(accountId: string) {
     setSyncingId(accountId);
     try {
-      await fetch(`/api/accounts/${accountId}/sync`, { method: "POST" });
+      const res = await fetch(`/api/accounts/${accountId}/sync`, { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError((data as { error?: string }).error || "Sync failed");
+      }
       await fetchAccounts();
     } catch {
-      // silently ignore
+      setError("Sync request failed");
     } finally {
       setSyncingId(null);
     }

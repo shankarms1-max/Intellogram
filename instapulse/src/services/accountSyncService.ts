@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { decryptToken } from "@/lib/encryption";
-import { getAccountProfile } from "./instagramApiClient";
+import { getAccountProfile, getCompetitorPublicProfile, getOwnInstagramBusinessAccountId } from "./instagramApiClient";
 import { extractHashtags, calcEngagementRate } from "@/lib/utils";
 import { getRecentMedia, getMediaInsights } from "./instagramApiClient";
 
@@ -199,6 +199,149 @@ export async function syncOwnAccount(
     where: { id: trackedAccountId },
     data: { lastSyncedAt: new Date() },
   });
+
+  await db.syncJob.update({
+    where: { id: job.id },
+    data: {
+      status: "completed",
+      completedAt: new Date(),
+      metadata: { trackedAccountId, username: account.username, mediaCount: synced },
+    },
+  });
+
+  return { success: true, mediaCount: synced };
+}
+
+/** Resolves a workspace access token from either InstagramConnection or WorkspaceCredential (byok_token). */
+async function resolveWorkspaceAccessToken(workspaceId: string): Promise<string | null> {
+  // Prefer an active OAuth connection
+  const conn = await db.instagramConnection.findFirst({
+    where: { workspaceId, status: "active" },
+    orderBy: { updatedAt: "desc" },
+  });
+  if (conn) {
+    try { return decryptToken(conn.accessTokenEncrypted); } catch { /* fall through */ }
+  }
+  // Fall back to BYOK token credential
+  const cred = await db.workspaceCredential.findUnique({ where: { workspaceId } });
+  if (cred?.mode === "byok_token" && cred.accessTokenEncrypted) {
+    try { return decryptToken(cred.accessTokenEncrypted); } catch { /* fall through */ }
+  }
+  return null;
+}
+
+export async function syncCompetitorAccount(
+  workspaceId: string,
+  trackedAccountId: string
+): Promise<{ success: boolean; error?: string; mediaCount?: number }> {
+  const account = await db.trackedAccount.findUnique({ where: { id: trackedAccountId } });
+  if (!account) return { success: false, error: "Account not found" };
+  if (account.workspaceId !== workspaceId) return { success: false, error: "Account does not belong to this workspace" };
+
+  const job = await db.syncJob.create({
+    data: {
+      workspaceId,
+      jobType: "competitor_sync",
+      status: "running",
+      startedAt: new Date(),
+      metadata: { trackedAccountId, username: account.username },
+    },
+  });
+
+  const accessToken = await resolveWorkspaceAccessToken(workspaceId);
+  if (!accessToken) {
+    await db.syncJob.update({
+      where: { id: job.id },
+      data: { status: "failed", completedAt: new Date(), errorMessage: "No active access token found. Connect your Instagram account first." },
+    });
+    return { success: false, error: "No active access token found. Connect your Instagram account first." };
+  }
+
+  // Get our own IG Business Account ID (required for Business Discovery API)
+  const ownIgUserId = await getOwnInstagramBusinessAccountId(workspaceId, accessToken);
+  if (!ownIgUserId) {
+    await db.syncJob.update({
+      where: { id: job.id },
+      data: { status: "failed", completedAt: new Date(), errorMessage: "Could not find a connected Instagram Business/Creator account. Business Discovery API requires your own account to be connected." },
+    });
+    return { success: false, error: "Could not find a connected Instagram Business/Creator account." };
+  }
+
+  const profile = await getCompetitorPublicProfile(workspaceId, ownIgUserId, account.username, accessToken, account.fetchLimit);
+  if (!profile) {
+    await db.syncJob.update({
+      where: { id: job.id },
+      data: { status: "failed", completedAt: new Date(), errorMessage: `Could not fetch public profile for @${account.username}. Account may be private, personal (non-Business/Creator), or username may be wrong.` },
+    });
+    await db.trackedAccount.update({ where: { id: trackedAccountId }, data: { status: "unavailable" } });
+    return { success: false, error: `Could not fetch public profile for @${account.username}. The account must be a public Business or Creator account.` };
+  }
+
+  // Update tracked account with public profile data
+  await db.trackedAccount.update({
+    where: { id: trackedAccountId },
+    data: {
+      displayName: profile.name ?? null,
+      profilePictureUrl: profile.profile_picture_url ?? null,
+      biography: profile.biography ?? null,
+      website: profile.website ?? null,
+      followersCount: profile.followers_count ?? null,
+      mediaCount: profile.media_count ?? null,
+      instagramUserId: profile.id,
+      status: "active",
+      lastSyncedAt: new Date(),
+    },
+  });
+
+  // Save daily snapshot (followers only — no private insights for competitors)
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  await db.accountSnapshot.upsert({
+    where: { trackedAccountId_snapshotDate: { trackedAccountId, snapshotDate: today } },
+    update: { followersCount: profile.followers_count ?? null, mediaCount: profile.media_count ?? null },
+    create: {
+      workspaceId,
+      trackedAccountId,
+      snapshotDate: today,
+      followersCount: profile.followers_count ?? null,
+      mediaCount: profile.media_count ?? null,
+    },
+  });
+
+  // Upsert public media items (no insights — reach/impressions/saves not available)
+  let synced = 0;
+  for (const item of profile.media?.data ?? []) {
+    const engRate = calcEngagementRate(
+      item.like_count ?? null,
+      item.comments_count ?? null,
+      profile.followers_count ?? null
+    );
+    await db.mediaItem.upsert({
+      where: { trackedAccountId_instagramMediaId: { trackedAccountId, instagramMediaId: item.id } },
+      update: {
+        likeCount: item.like_count ?? null,
+        commentsCount: item.comments_count ?? null,
+        engagementRate: engRate,
+        fetchedAt: new Date(),
+      },
+      create: {
+        workspaceId,
+        trackedAccountId,
+        instagramMediaId: item.id,
+        mediaType: item.media_type,
+        caption: item.caption ?? null,
+        permalink: item.permalink ?? null,
+        thumbnailUrl: item.thumbnail_url ?? null,
+        timestamp: new Date(item.timestamp),
+        likeCount: item.like_count ?? null,
+        commentsCount: item.comments_count ?? null,
+        engagementRate: engRate,
+        hashtags: extractHashtags(item.caption),
+        // reach/impressions/saves/shares are null — not available via Business Discovery
+      },
+    });
+    synced++;
+  }
 
   await db.syncJob.update({
     where: { id: job.id },

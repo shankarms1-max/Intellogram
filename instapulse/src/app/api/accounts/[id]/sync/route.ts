@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { getOrCreateDefaultWorkspace } from "@/lib/workspace";
 import { db } from "@/lib/db";
-import { syncOwnAccount } from "@/services/accountSyncService";
+import { syncOwnAccount, syncCompetitorAccount } from "@/services/accountSyncService";
 import { isWorkspaceRateLimited } from "@/services/instagramApiClient";
 
 export async function POST(
@@ -31,14 +31,6 @@ export async function POST(
     return NextResponse.json({ error: "Account not found" }, { status: 404 });
   }
 
-  // Only own accounts can be synced via API
-  if (account.accountType !== "own") {
-    return NextResponse.json(
-      { error: "Only own accounts can be synced via API. Competitors require CSV import." },
-      { status: 400 }
-    );
-  }
-
   const rateLimited = await isWorkspaceRateLimited(workspace.id);
   if (rateLimited) {
     return NextResponse.json(
@@ -47,7 +39,9 @@ export async function POST(
     );
   }
 
-  const result = await syncOwnAccount(workspace.id, id);
+  const result = account.accountType === "own"
+    ? await syncOwnAccount(workspace.id, id)
+    : await syncCompetitorAccount(workspace.id, id);
 
   if (!result.success) {
     return NextResponse.json({ error: result.error }, { status: 500 });

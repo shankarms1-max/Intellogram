@@ -440,6 +440,62 @@ export async function getMediaInsights(
   return insights;
 }
 
+// ─── Business Discovery API (competitor public profiles) ─────────────────────
+
+export interface CompetitorPublicProfile {
+  id: string;
+  username: string;
+  name?: string;
+  biography?: string;
+  website?: string;
+  profile_picture_url?: string;
+  followers_count?: number;
+  media_count?: number;
+  media?: { data: InstagramMediaItem[] };
+}
+
+/**
+ * Fetches public profile + recent media for a competitor/public IG Business account
+ * using the Business Discovery API. Requires your own connected IG Business Account ID.
+ */
+export async function getCompetitorPublicProfile(
+  workspaceId: string,
+  ownIgUserId: string,
+  competitorUsername: string,
+  accessToken: string,
+  mediaLimit = 30
+): Promise<CompetitorPublicProfile | null> {
+  const mediaFields = `media.limit(${Math.min(mediaLimit, 50)}){id,media_type,caption,permalink,thumbnail_url,timestamp,like_count,comments_count}`;
+  const profileFields = `id,username,name,biography,website,profile_picture_url,followers_count,media_count,${mediaFields}`;
+  const fields = `business_discovery.fields(${profileFields})`;
+  const url = `${BASE_URL}/${ownIgUserId}?fields=${encodeURIComponent(fields)}&username=${encodeURIComponent(competitorUsername)}&access_token=${accessToken}`;
+
+  const result = await safeApiCall<{ business_discovery: CompetitorPublicProfile }>(workspaceId, url);
+  if (!result.data?.business_discovery) return null;
+  return result.data.business_discovery;
+}
+
+/**
+ * Gets the caller's own Instagram Business Account ID from their FB page list.
+ * Required as the entry point for Business Discovery API calls.
+ */
+export async function getOwnInstagramBusinessAccountId(
+  workspaceId: string,
+  accessToken: string
+): Promise<string | null> {
+  const url = `${BASE_URL}/me/accounts?fields=instagram_business_account{id}&access_token=${accessToken}`;
+  const result = await safeApiCall<{
+    data: Array<{ instagram_business_account?: { id: string } }>;
+  }>(workspaceId, url);
+  if (!result.data) return null;
+  for (const page of result.data.data || []) {
+    if (page.instagram_business_account?.id) {
+      return page.instagram_business_account.id;
+    }
+  }
+  return null;
+}
+
 export async function getAccountInsights(
   workspaceId: string,
   igUserId: string,
