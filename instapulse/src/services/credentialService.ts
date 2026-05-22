@@ -21,6 +21,7 @@ export interface WorkspaceCredentialConfig {
   hasAccessToken: boolean;
   instagramUserId: string | null;
   instagramUsername: string | null;
+  igBusinessAccountId: string | null;
   tokenExpiresAt: Date | null;
   tokenScopes: string[];
   lastValidatedAt: Date | null;
@@ -58,6 +59,7 @@ export async function getWorkspaceCredentialConfig(
       hasAccessToken: false,
       instagramUserId: null,
       instagramUsername: null,
+      igBusinessAccountId: null,
       tokenExpiresAt: null,
       tokenScopes: [],
       lastValidatedAt: null,
@@ -73,6 +75,7 @@ export async function getWorkspaceCredentialConfig(
     hasAccessToken: Boolean(cred.accessTokenEncrypted),
     instagramUserId: cred.instagramUserId,
     instagramUsername: cred.instagramUsername,
+    igBusinessAccountId: cred.igBusinessAccountId ?? null,
     tokenExpiresAt: cred.tokenExpiresAt,
     tokenScopes: cred.tokenScopes,
     lastValidatedAt: cred.lastValidatedAt,
@@ -196,6 +199,7 @@ export async function saveByokToken(
   tokenInfo: {
     instagramUserId?: string | null;
     instagramUsername?: string | null;
+    igBusinessAccountId?: string | null;
     expiresAt?: Date | null;
     scopes: string[];
   }
@@ -207,6 +211,9 @@ export async function saveByokToken(
       accessTokenEncrypted: encryptToken(token),
       instagramUserId: tokenInfo.instagramUserId ?? null,
       instagramUsername: tokenInfo.instagramUsername ?? null,
+      ...(tokenInfo.igBusinessAccountId !== undefined
+        ? { igBusinessAccountId: tokenInfo.igBusinessAccountId }
+        : {}),
       tokenExpiresAt: tokenInfo.expiresAt ?? null,
       tokenScopes: tokenInfo.scopes,
       // Clear any byok_app data
@@ -223,6 +230,7 @@ export async function saveByokToken(
       accessTokenEncrypted: encryptToken(token),
       instagramUserId: tokenInfo.instagramUserId ?? null,
       instagramUsername: tokenInfo.instagramUsername ?? null,
+      igBusinessAccountId: tokenInfo.igBusinessAccountId ?? null,
       tokenExpiresAt: tokenInfo.expiresAt ?? null,
       tokenScopes: tokenInfo.scopes,
       status: "active",

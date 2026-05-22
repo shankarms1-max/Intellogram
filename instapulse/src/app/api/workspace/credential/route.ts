@@ -8,6 +8,7 @@ import {
   saveByokAppCredentials,
   isPlatformMetaConfigured,
 } from "@/services/credentialService";
+import { db } from "@/lib/db";
 import { z } from "zod";
 
 const putSchema = z.discriminatedUnion("mode", [
@@ -67,6 +68,36 @@ export async function PUT(request: NextRequest) {
     }
 
     return NextResponse.json({ error: "Unknown mode" }, { status: 400 });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return NextResponse.json({ error: err.issues[0]?.message ?? "Validation error" }, { status: 400 });
+    }
+    return NextResponse.json({ error: "Failed to update credential" }, { status: 500 });
+  }
+}
+
+const patchSchema = z.object({
+  igBusinessAccountId: z.string().min(1).nullable(),
+});
+
+/** PATCH /api/workspace/credential — update specific credential fields (e.g. manual IG account ID) */
+export async function PATCH(request: NextRequest) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const user = session.user as { id: string; name?: string | null };
+  const workspace = await getOrCreateDefaultWorkspace(user.id, user.name);
+
+  try {
+    const body = await request.json();
+    const parsed = patchSchema.parse(body);
+
+    await db.workspaceCredential.updateMany({
+      where: { workspaceId: workspace.id },
+      data: { igBusinessAccountId: parsed.igBusinessAccountId },
+    });
+
+    return NextResponse.json({ success: true, igBusinessAccountId: parsed.igBusinessAccountId });
   } catch (err) {
     if (err instanceof z.ZodError) {
       return NextResponse.json({ error: err.issues[0]?.message ?? "Validation error" }, { status: 400 });

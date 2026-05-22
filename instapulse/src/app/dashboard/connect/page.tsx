@@ -43,6 +43,7 @@ interface CredentialConfig {
   hasAccessToken: boolean;
   instagramUserId: string | null;
   instagramUsername: string | null;
+  igBusinessAccountId: string | null;
   tokenExpiresAt: string | null;
   tokenScopes: string[];
   lastValidatedAt: string | null;
@@ -734,6 +735,7 @@ function ByokTokenPanel({
   const [saveResult, setSaveResult] = useState<{
     valid: boolean;
     instagramUsername: string | null;
+    igBusinessAccountId: string | null;
     scopes: string[];
     expiresAt: string | null;
     accountsConnected: number;
@@ -741,8 +743,14 @@ function ByokTokenPanel({
   } | null>(null);
   const [validating, setValidating] = useState(false);
   const [validateResult, setValidateResult] = useState<string | null>(null);
+  const [igAccountId, setIgAccountId] = useState("");
+  const [savingIgId, setSavingIgId] = useState(false);
+  const [igIdSaved, setIgIdSaved] = useState(false);
+  const [igIdError, setIgIdError] = useState<string | null>(null);
 
   const isActive = credential?.mode === "byok_token";
+  const hasIgBusinessAccountId = !!(credential?.igBusinessAccountId || saveResult?.igBusinessAccountId);
+  const currentIgBusinessAccountId = credential?.igBusinessAccountId ?? null;
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -778,6 +786,30 @@ function ByokTokenPanel({
       setValidateResult("Validation request failed");
     } finally {
       setValidating(false);
+    }
+  }
+
+  async function handleSaveIgAccountId(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingIgId(true);
+    setIgIdError(null);
+    setIgIdSaved(false);
+    try {
+      const res = await fetch("/api/workspace/credential", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ igBusinessAccountId: igAccountId.trim() || null }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to save");
+      setIgIdSaved(true);
+      setIgAccountId("");
+      onSaved();
+      setTimeout(() => setIgIdSaved(false), 4000);
+    } catch (err: unknown) {
+      setIgIdError(err instanceof Error ? err.message : "Could not save");
+    } finally {
+      setSavingIgId(false);
     }
   }
 
@@ -908,6 +940,80 @@ function ByokTokenPanel({
             {saving ? <><Loader2 className="h-4 w-4 animate-spin" /> Validating…</> : <><BadgeCheck className="h-4 w-4" /> Validate &amp; Save Token</>}
           </Button>
         </form>
+
+        <Separator />
+
+        {/* IG Business Account ID — required for competitor sync */}
+        {isActive && (
+          <div className="space-y-3">
+            <div>
+              <p className="text-sm font-medium">Instagram Business Account ID</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Required for competitor account sync. This is your own Instagram Business or Creator account&apos;s numeric ID (not your Facebook User ID).
+              </p>
+            </div>
+
+            {hasIgBusinessAccountId ? (
+              <div className="flex items-center gap-2 rounded-md bg-emerald-50 border border-emerald-200 px-3 py-2 text-sm text-emerald-700">
+                <CheckCircle2 className="h-4 w-4 shrink-0" />
+                IG Business Account ID set: <code className="font-mono">{currentIgBusinessAccountId}</code>
+                <span className="text-xs text-emerald-600 ml-1">— competitor sync enabled</span>
+              </div>
+            ) : (
+              <div className="rounded-md bg-amber-50 border border-amber-200 px-4 py-3 text-sm space-y-2">
+                <p className="font-medium text-amber-800 flex items-center gap-1.5">
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  No Instagram Business Account linked
+                </p>
+                <p className="text-xs text-amber-700 leading-relaxed">
+                  Your token is a Facebook User token with no Instagram Business account connected to your Facebook Pages.
+                  Competitor sync requires your own IG Business/Creator account ID as a lookup lens.
+                </p>
+                <p className="text-xs font-medium text-amber-800">Option A — Link Instagram to your Facebook Page (recommended):</p>
+                <ol className="text-xs text-amber-700 pl-4 list-decimal space-y-0.5">
+                  <li>Go to your Facebook Page → Settings → Linked Accounts → Instagram → Connect</li>
+                  <li>OR: Instagram app → Settings → Accounts Centre → Add Facebook account</li>
+                  <li>Re-save your token above — the IG account ID will be detected automatically</li>
+                </ol>
+                <p className="text-xs font-medium text-amber-800 mt-1">Option B — Enter your IG Business Account ID manually:</p>
+                <ol className="text-xs text-amber-700 pl-4 list-decimal space-y-0.5">
+                  <li>Open <strong>Meta Graph API Explorer</strong> (developers.facebook.com/tools/explorer)</li>
+                  <li>Paste your token and call: <code className="font-mono bg-amber-100 px-1 rounded">/me/accounts?fields=instagram_business_account&#123;id,username&#125;</code></li>
+                  <li>Copy the <code className="font-mono bg-amber-100 px-1 rounded">id</code> value and paste it below</li>
+                </ol>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveIgAccountId} className="flex gap-2 items-end">
+              <div className="flex-1 space-y-1.5">
+                <Label htmlFor="ig-account-id" className="text-xs">
+                  {hasIgBusinessAccountId ? "Update IG Business Account ID" : "IG Business Account ID"}
+                </Label>
+                <Input
+                  id="ig-account-id"
+                  value={igAccountId}
+                  onChange={(e) => setIgAccountId(e.target.value)}
+                  placeholder={currentIgBusinessAccountId ?? "e.g. 17841400000000000"}
+                  className="font-mono text-xs h-8"
+                />
+              </div>
+              <Button type="submit" size="sm" disabled={savingIgId || !igAccountId.trim()} className="h-8">
+                {savingIgId ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+              </Button>
+            </form>
+
+            {igIdSaved && (
+              <p className="text-xs text-emerald-700 flex items-center gap-1">
+                <CheckCircle2 className="h-3.5 w-3.5" /> IG Business Account ID saved — competitor sync should now work.
+              </p>
+            )}
+            {igIdError && (
+              <p className="text-xs text-red-600 flex items-center gap-1">
+                <AlertTriangle className="h-3.5 w-3.5" /> {igIdError}
+              </p>
+            )}
+          </div>
+        )}
 
         <Separator />
         <div className="text-xs text-muted-foreground space-y-1">

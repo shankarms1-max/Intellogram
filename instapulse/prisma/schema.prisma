@@ -98,11 +98,12 @@ model WorkspaceCredential {
   metaAppSecretEncrypted String?  @db.Text
 
   // BYOK Token fields — also used as runtime cache after OAuth in byok_app mode
-  accessTokenEncrypted String?   @db.Text
-  tokenExpiresAt       DateTime?
-  tokenScopes          String[]
-  instagramUserId      String?
-  instagramUsername    String?
+  accessTokenEncrypted  String?   @db.Text
+  tokenExpiresAt        DateTime?
+  tokenScopes           String[]
+  instagramUserId       String?
+  instagramUsername     String?
+  igBusinessAccountId   String?   // IG Business/Creator Account ID for Business Discovery API
 
   // Status tracking
   status          String    @default("active")

@@ -135,10 +135,12 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Step 5: save credential record
+    // Step 5: save credential record — prefer IG account from page discovery, fall back to validation result
+    const resolvedIgAccountId = igAccounts[0]?.id ?? validation.igBusinessAccountId ?? null;
     await saveByokToken(workspace.id, token, {
       instagramUserId: validation.instagramUserId,
       instagramUsername: validation.instagramUsername,
+      igBusinessAccountId: resolvedIgAccountId,
       expiresAt,
       scopes: validation.scopes,
     });
@@ -148,6 +150,7 @@ export async function POST(request: NextRequest) {
       accountsConnected: igAccounts.length,
       instagramUserId: validation.instagramUserId,
       instagramUsername: validation.instagramUsername,
+      igBusinessAccountId: resolvedIgAccountId,
       scopes: validation.scopes,
       missingScopes,
       expiresAt,
