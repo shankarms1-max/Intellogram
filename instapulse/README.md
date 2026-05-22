@@ -1,0 +1,395 @@
+# InstaPulse Analytics
+
+A production-ready Instagram Analytics SaaS built with Next.js 16, Prisma 7, and the official Meta Instagram Graph API.
+
+> **Important:** InstaPulse uses **only** official Instagram Graph APIs. No scraping, no Puppeteer, no unofficial endpoints.
+
+---
+
+## Tech Stack
+
+| Layer | Technology | Why |
+|---|---|---|
+| Framework | Next.js 16.2.6 (App Router, TypeScript) | Server components + API routes in one repo |
+| Auth | NextAuth.js v4 (credentials + JWT) | Full control over session/token lifecycle without vendor lock-in |
+| Database | PostgreSQL via Prisma 7 + `@prisma/adapter-pg` | Works on Supabase, Neon, Railway, RDS |
+| ORM | Prisma 7 | Type-safe queries, schema migrations, `db push` for dev |
+| Styling | Tailwind CSS v4 | Utility-first, zero runtime |
+| Charts | Recharts | Well-maintained, composable React charts |
+| Encryption | crypto-js (AES-256) | Tokens/secrets encrypted at rest before DB write |
+| CSV | PapaParse | Fast, battle-tested CSV parse/unparse |
+| Validation | Zod v4 | Runtime validation matching TypeScript types |
+| Icons | Lucide React | Tree-shakeable icon library |
+
+> **Why NextAuth and not Supabase Auth?** NextAuth gives us full control over the session strategy and lets us use any PostgreSQL host without coupling the auth layer to Supabase. The credential provider handles email/password without any third-party dependency on the auth path.
+
+---
+
+## Features Built
+
+### Phase 1 — Core App
+- Email/password auth (sign up, sign in, session-guarded routes)
+- Per-user default workspace auto-created on first login
+- 11-model Prisma schema with proper indexes and cascade deletes
+- Demo mode — seeds 8 accounts + 30 days of data on first login; no real API calls
+- Dashboard home, Accounts manager, Media explorer, Analytics charts
+- Reports (daily snapshot, weekly competitor, monthly performance) with CSV download
+- CSV bulk import/export with formula-injection sanitization
+- Settings page (workspace name, industry, description)
+
+### Phase 2 — Instagram Integration
+- Full Meta OAuth flow (start → callback → token exchange → account discovery)
+- Account sync: profile + recent media + insights for own accounts
+- Per-account and workspace-wide sync with SyncJob records
+- Rate-limit header capture (`X-App-Usage`, `X-Business-Use-Case-Usage`) stored per API log
+- Rate-limit threshold logic: warn ≥60%, pause-non-critical ≥80%, stop-sync ≥90%
+- API Logs page with filter/pagination
+
+### Phase 3 — BYOK Credentials
+- **Managed**: platform Meta App from env vars (default)
+- **BYO Meta App**: workspace admin enters own App ID + Secret (AES-256 encrypted)
+- **BYO Access Token**: paste long-lived token, validate before saving
+- Six credential status states: `active | expired | invalid | missing_permissions | rate_limited | unconfigured`
+
+### Phase 4 — Competitor Intelligence
+- Metric availability matrix (own vs competitor) — explicit "Not available via API"
+- No private competitor metrics, no fake data
+
+---
+
+## Instagram API Limitations
+
+| Metric | Own Account | Competitor Account |
+|---|---|---|
+| Followers | Full | Public only |
+| Media list | Full | Public only |
+| Like count | Full | If public |
+| Comment count | Full | If public |
+| Reach | Full | **Not available** |
+| Impressions | Full | **Not available** |
+| Saves | Full | **Not available** |
+| Shares | Full | **Not available** |
+| Story insights | Full | **Not available** |
+| Audience demographics | Full | **Not available** |
+
+Unavailable metrics are stored as `null` and displayed as "Not available via Instagram API" — no fake data.
+
+---
+
+## Local Setup
+
+### Prerequisites
+- Node.js 18+
+- PostgreSQL (local or cloud)
+
+### 1. Install
+
+```bash
+cd instapulse
+npm install
+```
+
+### 2. Environment variables
+
+```env
+# ─── Database ────────────────────────────────────────────────────────────────
+DATABASE_URL="postgresql://user:password@localhost:5432/instapulse"
+
+# ─── NextAuth ────────────────────────────────────────────────────────────────
+# Generate: openssl rand -base64 32
+NEXTAUTH_SECRET="your-secret-here"
+NEXTAUTH_URL="http://localhost:3000"
+
+# ─── Encryption (required — NEVER leave default in production) ───────────────
+# Generate: openssl rand -hex 16
+TOKEN_ENCRYPTION_KEY="your-32-char-hex-key"
+
+# ─── Meta App (optional — use DEMO_MODE=true without it) ─────────────────────
+META_APP_ID="your-meta-app-id"
+META_APP_SECRET="your-meta-app-secret"
+META_REDIRECT_URI="http://localhost:3000/api/auth/meta/callback"
+INSTAGRAM_GRAPH_API_VERSION="v21.0"
+
+# ─── Demo mode ───────────────────────────────────────────────────────────────
+DEMO_MODE="true"
+NEXT_PUBLIC_DEMO_MODE="true"
+NEXT_PUBLIC_META_APP_ID="your-meta-app-id"   # safe — public identifier only
+
+# ─── Cron (for scheduled sync) ───────────────────────────────────────────────
+# Generate: openssl rand -hex 32
+CRON_SECRET="your-cron-secret"
+
+# ─── Support (shown on legal pages) ──────────────────────────────────────────
+SUPPORT_EMAIL="privacy@yourdomain.com"
+```
+
+### 3. Database setup
+
+```bash
+npm run db:generate   # Generate Prisma client
+npm run db:push       # Push schema to database (dev, no migration files)
+```
+
+### 4. Start
+
+```bash
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) → sign up → demo data seeds automatically.
+
+---
+
+## Configuring a Real Meta App
+
+1. Go to [Meta for Developers](https://developers.facebook.com/apps/) → **Create App** → Business type
+2. Add **Instagram Graph API** product
+3. Add **Facebook Login** product → set Valid OAuth Redirect URI:
+   ```
+   http://localhost:3000/api/auth/meta/callback
+   ```
+4. Request these permissions:
+   - `instagram_basic`
+   - `instagram_manage_insights`
+   - `pages_read_engagement`
+   - `pages_show_list`
+5. Copy **App ID** and **App Secret** to `.env` as `META_APP_ID` and `META_APP_SECRET`
+6. Set `DEMO_MODE="false"`
+
+**Alternative:** Enter credentials per-workspace via the Connect page → **Your Meta App** tab — no `.env` change needed.
+
+---
+
+## Database Commands
+
+```bash
+npm run db:generate    # Regenerate Prisma client after schema changes
+npm run db:push        # Push schema to DB (dev — no migration files)
+npm run db:migrate     # Create and apply a named migration (production)
+npm run db:seed        # Run seed script manually
+npm run db:studio      # Open Prisma Studio
+```
+
+---
+
+## Vercel + Supabase/Neon Deployment
+
+### 1. Create a PostgreSQL database
+
+- [Supabase](https://supabase.com) — free tier, connection pooling available
+- [Neon](https://neon.tech) — serverless Postgres, free tier
+
+Copy the connection string (use the **pooled** connection string on Supabase/Neon for serverless).
+
+### 2. Deploy to Vercel
+
+```bash
+npx vercel
+# or connect GitHub repo for automatic deployments
+```
+
+### 3. Set environment variables in Vercel
+
+In Vercel → Project → Settings → Environment Variables, add all variables from the `.env` section above, plus:
+
+```env
+NEXTAUTH_URL="https://your-app.vercel.app"
+META_REDIRECT_URI="https://your-app.vercel.app/api/auth/meta/callback"
+DEMO_MODE="false"
+NODE_ENV="production"
+```
+
+> `TOKEN_ENCRYPTION_KEY` **must** be set in production. The app will throw at startup if it is missing or shorter than 16 characters.
+
+### 4. Run database migrations
+
+```bash
+DATABASE_URL="<production-url>" npx prisma db push
+```
+
+For zero-downtime production migrations use `prisma migrate deploy` instead of `db push`.
+
+### 5. Update Meta App OAuth redirect
+
+Add your production URL to Meta App → Facebook Login → Valid OAuth Redirect URIs:
+```
+https://your-app.vercel.app/api/auth/meta/callback
+```
+
+---
+
+## Cron / Scheduled Sync
+
+Add a `vercel.json` in the project root to enable daily sync:
+
+```json
+{
+  "crons": [
+    {
+      "path": "/api/cron/sync-instagram",
+      "schedule": "0 6 * * *"
+    }
+  ]
+}
+```
+
+Vercel automatically sends `Authorization: Bearer <CRON_SECRET>` when invoking cron routes. Set `CRON_SECRET` in your Vercel environment variables.
+
+The cron route:
+- Skips entirely if `DEMO_MODE=true`
+- Skips workspaces where rate-limit status is `rate_limited` (≥90% Meta API quota)
+- Creates `SyncJob` records per account
+- Returns a JSON summary of workspaces processed
+
+---
+
+## Meta App Review Checklist
+
+Before submitting for Meta App Review to get `instagram_manage_insights` approved:
+
+- [ ] Privacy Policy URL set in App settings → pointing to `/privacy`
+- [ ] Terms of Service URL set in App settings → pointing to `/terms`
+- [ ] Data Deletion callback URL set → pointing to `/data-deletion`
+- [ ] App Icon and App Description filled in
+- [ ] Valid OAuth Redirect URI matches production URL exactly
+- [ ] Demo video showing the OAuth connect flow and dashboard
+- [ ] Confirmed that you only request permissions you actually use
+- [ ] `instagram_basic` — used for profile data
+- [ ] `instagram_manage_insights` — used for reach/impressions/saves on own media
+- [ ] `pages_read_engagement` — used to link Facebook Pages to Instagram accounts
+- [ ] `pages_show_list` — used to discover linked pages via `/me/accounts`
+- [ ] App is in Live mode (not Development mode) before submission
+- [ ] Test with a non-admin test user account
+
+---
+
+## Security Notes
+
+| Concern | Implementation |
+|---|---|
+| Access tokens at rest | AES-256 encrypted (`crypto-js`) — never plain text |
+| Meta App Secret at rest | AES-256 encrypted |
+| Token exposure to browser | Never — all Meta API calls are server-side |
+| Session validation | Every API route calls `getServerSession(authOptions)` |
+| Workspace isolation | All DB queries filter by `workspaceId` verified against session |
+| CSV formula injection | Cells starting with `=`, `+`, `-`, `@` are prefixed to prevent spreadsheet execution |
+| Encryption key enforcement | Throws at startup in production if `TOKEN_ENCRYPTION_KEY` is missing |
+| Cron auth | `CRON_SECRET` bearer token required; missing secret returns 401 |
+| Demo mode | Sync endpoints return 403 in demo mode; no real API calls made |
+
+---
+
+## Known Limitations
+
+1. **Competitor private metrics** — Instagram API only returns public data for non-connected accounts
+2. **Token expiry** — Long-lived tokens expire in ~60 days; BYO Token mode requires manual refresh
+3. **Rate limits** — Meta Graph API enforces per-app quotas; sync pauses automatically at ≥90%
+4. **Historical data** — Only recent media is fetched after connection; historical posts not backfilled
+5. **Stories** — Story insights require special time-windowed API access; not currently implemented
+6. **Personal accounts** — Only Business/Creator accounts can connect to the Graph API
+7. **App Review** — `instagram_manage_insights` requires Meta App Review before use in production
+
+---
+
+## Legal Pages
+
+| Page | Purpose |
+|---|---|
+| `/privacy` | Privacy Policy (required by Meta) |
+| `/terms` | Terms of Service |
+| `/data-deletion` | Data Deletion Request (required by Meta for Facebook Login) |
+
+Set `SUPPORT_EMAIL` env var to customize the contact address shown on these pages.
+
+---
+
+## Meta API Access Strategy
+
+### Instagram is not YouTube
+
+YouTube Data API lets you create a Google Cloud project, enable the API, generate an API key, and immediately fetch public channel and video data. **Instagram does not work this way.**
+
+Meta's Instagram Graph API requires:
+- A Meta Developer App (App ID + App Secret)
+- Facebook Login / Instagram Graph API product added to the app
+- OAuth flow — user must grant permissions via their Facebook/Instagram account
+- The Instagram account must be a **Business or Creator** account
+- The account must be **linked to a Facebook Page**
+- Required permissions: `instagram_basic`, `instagram_manage_insights`, `pages_read_engagement`, `pages_show_list`
+- `instagram_manage_insights` requires **Meta App Review** before granting to users outside the development team
+
+There is no simple server-side API key that fetches public Instagram data.
+
+### Recommended credential mode by user type
+
+| User type | Recommended mode | Why |
+|---|---|---|
+| Starter / Pro users | **Managed OAuth (Connect Instagram)** | No Meta Developer account needed. InstaPulse handles the Meta App. |
+| Agencies | Managed OAuth + optional **BYO Meta App** | BYO Meta App isolates API quota and separates the OAuth relationship per client. |
+| Enterprise | **Dedicated BYO Meta App** with assisted setup | Full control, quota isolation, client-owned Meta Business assets. |
+| Developers / testing | **Developer Token Mode** (BYO Access Token) | Useful for CI environments or direct token testing. Not recommended for production. |
+
+### Meta API quota
+
+Meta does not provide unlimited API quota and does not use a simple YouTube-style quota unit system. Rate limits are applied dynamically based on:
+- Per-app usage (tracked via `X-App-Usage` response header)
+- Per-business-use-case usage (`X-Business-Use-Case-Usage` header)
+
+InstaPulse logs these headers in the API Logs page after every call. Threshold behavior:
+- ≥60% usage → warning logged
+- ≥80% usage → non-critical sync paused for the workspace
+- ≥90% usage → workspace marked `rate_limited`, sync skipped until usage drops
+
+Agencies with BYO Meta App get dedicated quota — their API usage does not count against the shared platform app.
+
+### What BYO Meta App does and does NOT unlock
+
+**Does help with:**
+- Quota / rate-limit isolation from the shared platform app
+- Ownership of the OAuth relationship and permissions
+- Agency and enterprise control over Meta Business assets
+- Dedicated setup for clients with their own Meta Business Portfolio
+
+**Does NOT unlock:**
+- Competitor reach, impressions, saves, shares, story insights, or audience demographics
+- Any private metric for competitor accounts
+- Watch time, retention, or reel analytics for competitor accounts
+- Increased API quota beyond what Meta allows per-app
+
+Competitor metrics are always limited to what the official Instagram Graph API exposes for non-connected public accounts. This is a Meta API restriction and cannot be worked around.
+
+---
+
+## Agency / Enterprise BYO Meta App Onboarding
+
+This setup is available as **assisted onboarding** for Agency and Enterprise customers. The platform team guides the technical configuration steps; the client must provide or approve access to their Meta Business assets.
+
+### What assisted onboarding covers
+
+- Creating or auditing the client's Meta Developer App
+- Adding the Instagram Graph API product
+- Configuring the correct OAuth redirect URI
+- Requesting the correct permissions (`instagram_basic`, `instagram_manage_insights`, `pages_read_engagement`, `pages_show_list`)
+- Validating the first successful OAuth connection and sync
+- Guidance on Meta App Review submission (if not yet approved)
+
+### What the client must provide
+
+| Access required | Why |
+|---|---|
+| Meta Business Portfolio admin access | Required to manage the Meta Developer App |
+| Facebook Page admin access | Required for Instagram Graph API OAuth |
+| Instagram Business or Creator account | Personal accounts cannot connect to the Graph API |
+| Instagram account linked to the Facebook Page | Required for API access |
+| Ability to approve OAuth permissions | User must grant permissions during the OAuth flow |
+
+### Meta App Review
+
+`instagram_manage_insights` — required for reach, impressions, saves, and other own-account insights — must go through Meta App Review before it can be granted to users outside the development team.
+
+- App Review is submitted through the Meta App Dashboard
+- Meta controls approval timelines and outcomes; these cannot be guaranteed
+- While in Development mode, only accounts added as test users can connect
+- After approval and Live mode, any Instagram Business/Creator account can connect
+
+For the full checklist, see [PRODUCTION_CHECKLIST.md](PRODUCTION_CHECKLIST.md).

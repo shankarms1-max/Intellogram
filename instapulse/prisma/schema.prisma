@@ -1,0 +1,330 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  password      String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts             Account[]
+  sessions             Session[]
+  ownedWorkspaces      Workspace[]
+  workspaceMembers     WorkspaceMember[]
+  instagramConnections InstagramConnection[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  ownerId   String
+  plan      String   @default("free")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner                User                  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  members              WorkspaceMember[]
+  credential           WorkspaceCredential?
+  instagramConnections InstagramConnection[]
+  trackedAccounts      TrackedAccount[]
+  accountSnapshots     AccountSnapshot[]
+  mediaItems           MediaItem[]
+  syncJobs             SyncJob[]
+  apiLogs              ApiLog[]
+  reports              Report[]
+}
+
+// Stores which credential mode the workspace uses and the associated credentials.
+// "managed"    → use platform Meta App from env vars (default)
+// "byok_app"   → workspace provides their own Meta App ID + Secret; OAuth uses these
+// "byok_token" → workspace provides a long-lived access token directly (advanced/testing)
+model WorkspaceCredential {
+  id          String @id @default(cuid())
+  workspaceId String @unique
+
+  @@index([workspaceId])
+
+  mode String @default("managed")
+  // managed | byok_app | byok_token
+
+  // BYOK App fields
+  metaAppId              String?
+  metaAppSecretEncrypted String?  @db.Text
+
+  // BYOK Token fields — also used as runtime cache after OAuth in byok_app mode
+  accessTokenEncrypted String?   @db.Text
+  tokenExpiresAt       DateTime?
+  tokenScopes          String[]
+  instagramUserId      String?
+  instagramUsername    String?
+
+  // Status tracking
+  status          String    @default("active")
+  // active | expired | invalid | missing_permissions | rate_limited | unconfigured
+  lastValidatedAt DateTime?
+  validationError String?   @db.Text
+  rateLimitInfo   Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model WorkspaceMember {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        String   @default("member")
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId])
+  @@index([userId])
+}
+
+model InstagramConnection {
+  id                   String    @id @default(cuid())
+  workspaceId          String
+  userId               String
+  provider             String    @default("instagram")
+  instagramUserId      String
+  instagramUsername    String
+  accessTokenEncrypted String    @db.Text
+  tokenExpiresAt       DateTime?
+  scopes               String[]
+  status               String    @default("active")
+  pageId               String?
+  pageName             String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, instagramUserId])
+  @@index([workspaceId])
+  @@index([workspaceId, status])
+}
+
+enum AccountType {
+  own
+  competitor
+  influencer
+  brand
+  other
+}
+
+enum AccountStatus {
+  active
+  pending
+  failed
+  unavailable
+  disabled
+}
+
+model TrackedAccount {
+  id                String        @id @default(cuid())
+  workspaceId       String
+  instagramUserId   String?
+  username          String
+  displayName       String?
+  profilePictureUrl String?
+  biography         String?
+  website           String?
+  accountType       AccountType   @default(other)
+  notes             String?
+  fetchLimit        Int           @default(50)
+  isActive          Boolean       @default(true)
+  status            AccountStatus @default(pending)
+  followersCount    Int?
+  followsCount      Int?
+  mediaCount        Int?
+  lastSyncedAt      DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  accountSnapshots AccountSnapshot[]
+  mediaItems       MediaItem[]
+
+  @@unique([workspaceId, username])
+  @@index([workspaceId])
+  @@index([workspaceId, accountType])
+  @@index([workspaceId, isActive])
+  @@index([workspaceId, status])
+}
+
+model AccountSnapshot {
+  id               String   @id @default(cuid())
+  workspaceId      String
+  trackedAccountId String
+  snapshotDate     DateTime @db.Date
+  followersCount   Int?
+  followsCount     Int?
+  mediaCount       Int?
+  totalLikes       Int?
+  totalComments    Int?
+  totalViews       Int?
+  engagementRate   Float?
+  rawJson          Json?
+  createdAt        DateTime @default(now())
+
+  workspace      Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  trackedAccount TrackedAccount @relation(fields: [trackedAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([trackedAccountId, snapshotDate])
+  @@index([workspaceId])
+  @@index([trackedAccountId])
+  @@index([workspaceId, snapshotDate])
+}
+
+model MediaItem {
+  id               String   @id @default(cuid())
+  workspaceId      String
+  trackedAccountId String
+  instagramMediaId String
+  mediaType        String
+  mediaProductType String?
+  caption          String?  @db.Text
+  permalink        String?
+  thumbnailUrl     String?
+  mediaUrl         String?
+  timestamp        DateTime
+  likeCount        Int?
+  commentsCount    Int?
+  viewsCount       Int?
+  playsCount       Int?
+  reach            Int?
+  impressions      Int?
+  saved            Int?
+  shares           Int?
+  engagementRate   Float?
+  hashtags         String[]
+  rawJson          Json?
+  fetchedAt        DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  workspace      Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  trackedAccount TrackedAccount @relation(fields: [trackedAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([trackedAccountId, instagramMediaId])
+  @@index([workspaceId])
+  @@index([trackedAccountId])
+  @@index([workspaceId, timestamp])
+  @@index([workspaceId, mediaType])
+}
+
+enum SyncJobStatus {
+  queued
+  running
+  completed
+  failed
+}
+
+model SyncJob {
+  id           String        @id @default(cuid())
+  workspaceId  String
+  jobType      String
+  status       SyncJobStatus @default(queued)
+  startedAt    DateTime?
+  completedAt  DateTime?
+  errorMessage String?
+  metadata     Json?
+  createdAt    DateTime      @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, status])
+}
+
+model ApiLog {
+  id            String   @id @default(cuid())
+  workspaceId   String
+  endpoint      String
+  method        String
+  statusCode    Int?
+  success       Boolean  @default(false)
+  errorMessage  String?
+  rateLimitInfo Json?
+  durationMs    Int?
+  createdAt     DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, success])
+}
+
+model Report {
+  id          String   @id @default(cuid())
+  workspaceId String
+  reportType  String
+  name        String
+  dateFrom    DateTime
+  dateTo      DateTime
+  fileUrl     String?
+  status      String   @default("pending")
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, status])
+}
