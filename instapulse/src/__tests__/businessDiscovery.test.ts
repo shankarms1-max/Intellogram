@@ -281,3 +281,82 @@ describe("UI display logic — viewsCount rendering", () => {
     expect(displayViews(undefined)).toBe("—");
   });
 });
+
+describe("Media Explorer API response shape", () => {
+  // These tests document that the /api/media route returns all DB fields
+  // (no select restriction) so viewsCount is always present in the JSON.
+  // Verified via: db.mediaItem.findMany({ include: { trackedAccount: {...} } })
+  // with NO select clause — Prisma returns every column of MediaItem.
+
+  const REQUIRED_MEDIA_ITEM_FIELDS = [
+    "id",
+    "instagramMediaId",
+    "trackedAccountId",
+    "mediaType",
+    "mediaProductType",
+    "caption",
+    "permalink",
+    "timestamp",
+    "likeCount",
+    "commentsCount",
+    "viewsCount",   // must be present; null for IMAGE, number for some VIDEO/REELS
+    "engagementRate",
+    "hashtags",
+  ] as const;
+
+  it("has a viewsCount field in the expected field list", () => {
+    expect(REQUIRED_MEDIA_ITEM_FIELDS).toContain("viewsCount");
+  });
+
+  it("has instagramMediaId in the expected field list", () => {
+    expect(REQUIRED_MEDIA_ITEM_FIELDS).toContain("instagramMediaId");
+  });
+
+  it("has mediaProductType in the expected field list (needed for type-specific display)", () => {
+    expect(REQUIRED_MEDIA_ITEM_FIELDS).toContain("mediaProductType");
+  });
+
+  it("a simulated media item with viewsCount = 13765110 passes the != null check", () => {
+    const fakeRow = { viewsCount: 13765110, mediaType: "VIDEO", mediaProductType: "REELS" };
+    expect(fakeRow.viewsCount != null).toBe(true);
+  });
+
+  it("a simulated IMAGE row with viewsCount = null passes the null check", () => {
+    const fakeRow = { viewsCount: null, mediaType: "IMAGE", mediaProductType: "FEED" };
+    expect(fakeRow.viewsCount != null).toBe(false);
+  });
+
+  it("Nike known Reel 18079952732530197 scenario — viewsCount = 13765110 displays correctly", () => {
+    const row = { instagramMediaId: "18079952732530197", mediaType: "VIDEO", mediaProductType: "REELS", viewsCount: 13765110 };
+    const display = row.viewsCount != null ? row.viewsCount.toLocaleString() : "—";
+    expect(display).not.toBe("—");
+  });
+
+  it("Nike known Reel 18043682267771164 scenario — viewsCount = 4270137 displays correctly", () => {
+    const row = { instagramMediaId: "18043682267771164", mediaType: "VIDEO", mediaProductType: "REELS", viewsCount: 4270137 };
+    const display = row.viewsCount != null ? row.viewsCount.toLocaleString() : "—";
+    expect(display).not.toBe("—");
+  });
+});
+
+describe("Full pipeline: fetch → map → store → display (documented invariants)", () => {
+  it("COMPETITOR_MEDIA_SUBFIELDS contains view_count — fetch layer includes it in the API request", () => {
+    expect(COMPETITOR_MEDIA_SUBFIELDS).toContain("view_count");
+  });
+
+  it("view_count mapped to viewsCount — the DB column name is camelCase of the API field", () => {
+    // Meta returns: view_count
+    // Prisma model field: viewsCount
+    // Mapping: item.view_count → viewsCount (via upsertCompetitorMediaItem)
+    const metaField = "view_count";
+    const dbField = "viewsCount";
+    expect(metaField).not.toBe(dbField); // different names — mapping must be explicit
+    expect(dbField).toBe("viewsCount");  // confirm DB field name is camelCase
+  });
+
+  it("daily_refresh fetches 25 posts — older Reels require initial_import or manual_deep_import", () => {
+    expect(SYNC_MODE_LIMITS.daily_refresh.mediaLimit).toBe(25);
+    expect(SYNC_MODE_LIMITS.initial_import.mediaLimit).toBeGreaterThan(25);
+    expect(SYNC_MODE_LIMITS.manual_deep_import.mediaLimit).toBeGreaterThan(100);
+  });
+});

@@ -59,9 +59,11 @@ interface TrackedAccountInfo {
 
 interface MediaItem {
   id: string;
+  instagramMediaId: string;
   trackedAccountId: string;
   trackedAccount: TrackedAccountInfo;
   mediaType: string;
+  mediaProductType: string | null;
   caption: string | null;
   permalink: string | null;
   thumbnailUrl: string | null;
@@ -311,7 +313,18 @@ export default function MediaPage() {
                 </tr>
               </thead>
               <tbody>
-                {items.map((item) => (
+                {items.map((item) => {
+                  const isCompetitor = item.trackedAccount.accountType !== "own";
+                  const isVideo = item.mediaType === "VIDEO";
+                  if (process.env.NODE_ENV !== "production" && isCompetitor && isVideo) {
+                    console.log("[MediaExplorer][views]", {
+                      mediaId: item.instagramMediaId,
+                      mediaType: item.mediaType,
+                      mediaProductType: item.mediaProductType,
+                      viewsCount: item.viewsCount,
+                    });
+                  }
+                  return (
                   <tr key={item.id} className="border-b border-border last:border-0 hover:bg-muted/20">
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-1.5">
@@ -347,7 +360,12 @@ export default function MediaPage() {
                       {item.commentsCount != null ? formatNumber(item.commentsCount) : "—"}
                     </td>
                     <td className="px-4 py-2.5 text-right tabular-nums text-xs">
-                      {item.viewsCount != null ? formatNumber(item.viewsCount) : "—"}
+                      {item.viewsCount != null
+                        ? formatNumber(item.viewsCount)
+                        : isCompetitor && isVideo
+                          ? <span title="Views are only returned by Meta for some Instagram competitor videos/Reels.">—</span>
+                          : "—"
+                      }
                     </td>
                     <td className="px-4 py-2.5 text-right tabular-nums text-xs font-medium">
                       {item.engagementRate != null ? formatPercent(item.engagementRate) : "—"}
@@ -366,7 +384,8 @@ export default function MediaPage() {
                       ) : null}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
