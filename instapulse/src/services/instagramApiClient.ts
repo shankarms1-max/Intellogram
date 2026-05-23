@@ -70,7 +70,8 @@ export const InstagramMetricCapability = {
     shares: false,
     likeCount: "only_if_public_api" as const,
     commentsCount: "only_if_public_api" as const,
-    viewsCount: false,
+    // view_count is returned for some VIDEO / REELS; absent for IMAGE / CAROUSEL_ALBUM
+    viewsCount: "only_if_public_api" as const,
   },
 };
 
@@ -148,6 +149,8 @@ export interface InstagramMediaItem {
   timestamp: string;
   like_count?: number;
   comments_count?: number;
+  // Returned by Meta for some VIDEO / REELS competitor media; absent for IMAGE / CAROUSEL_ALBUM
+  view_count?: number;
 }
 
 export interface InstagramMediaInsights {
@@ -631,9 +634,14 @@ export async function getMediaInsights(
 
 // ─── Business Discovery API (competitor public profiles) ─────────────────────
 
-// Do not add follows_count, media_url, thumbnail_url, reach, impressions, saved,
-// shares, or insights fields to competitor Business Discovery. Meta rejects the
-// entire request if any unsupported field is requested — even valid-looking names.
+// Do not add unsupported fields to competitor Business Discovery. Meta rejects the
+// entire request if even one unsupported competitor field is requested.
+// `view_count` is allowed where Meta returns it, mainly for some VIDEO / REELS media.
+// Never add: follows_count, media_url, thumbnail_url, reach, impressions, saved,
+// shares, plays, views, or insights.
+export const COMPETITOR_MEDIA_SUBFIELDS =
+  "id,caption,media_type,media_product_type,permalink,timestamp,like_count,comments_count,view_count";
+
 export const COMPETITOR_BUSINESS_DISCOVERY_FIELDS = [
   "id",
   "username",
@@ -643,8 +651,24 @@ export const COMPETITOR_BUSINESS_DISCOVERY_FIELDS = [
   "profile_picture_url",
   "followers_count",
   "media_count",
-  "media.limit(25){id,caption,media_type,media_product_type,permalink,timestamp,like_count,comments_count}",
+  `media.limit(25){${COMPETITOR_MEDIA_SUBFIELDS}}`,
 ] as const;
+
+// ─── Sync mode configuration ──────────────────────────────────────────────────
+
+export type CompetitorSyncMode = "daily_refresh" | "initial_import" | "manual_deep_import";
+
+/**
+ * Per-mode limits: mediaLimit = total posts to collect, maxPages = max Business Discovery pages.
+ * daily_refresh: 1 page of 25, no pagination.
+ * initial_import: up to 4 pages, 100 posts.
+ * manual_deep_import: up to 20 pages, 500 posts. Manual trigger only — never run from cron.
+ */
+export const SYNC_MODE_LIMITS: Record<CompetitorSyncMode, { mediaLimit: number; maxPages: number }> = {
+  daily_refresh:       { mediaLimit: 25,  maxPages: 1  },
+  initial_import:      { mediaLimit: 100, maxPages: 4  },
+  manual_deep_import:  { mediaLimit: 500, maxPages: 20 },
+};
 
 export interface CompetitorPublicProfile {
   id: string;
@@ -655,7 +679,13 @@ export interface CompetitorPublicProfile {
   profile_picture_url?: string;
   followers_count?: number;
   media_count?: number;
-  media?: { data: InstagramMediaItem[] };
+  media?: {
+    data: InstagramMediaItem[];
+    paging?: {
+      cursors?: { before?: string; after?: string };
+      next?: string;
+    };
+  };
 }
 
 export interface CompetitorPublicProfileResult {
@@ -722,6 +752,44 @@ export async function getCompetitorPublicProfile(
   }
 
   return { profile: result.data.business_discovery, errorStatus: null, errorMessage: null };
+}
+
+export interface CompetitorMediaPageResult {
+  items: InstagramMediaItem[];
+  nextCursor: string | null;
+  error: string | null;
+  rateLimitInfo?: Record<string, unknown>;
+}
+
+/**
+ * Fetches a subsequent page of competitor media using a Business Discovery cursor.
+ * Use this after the initial `getCompetitorPublicProfile` call to paginate further.
+ * Syntax: business_discovery.username(X){media.after(CURSOR).limit(N){fields}}
+ */
+export async function fetchCompetitorMediaNextPage(
+  workspaceId: string,
+  ownIgId: string,
+  competitorUsername: string,
+  afterCursor: string,
+  accessToken: string,
+  pageLimit = 25
+): Promise<CompetitorMediaPageResult> {
+  const limit = Math.min(pageLimit, 25);
+  const fields = `business_discovery.username(${competitorUsername}){media.after(${afterCursor}).limit(${limit}){${COMPETITOR_MEDIA_SUBFIELDS}}}`;
+  const params = new URLSearchParams();
+  params.set("fields", fields);
+  params.set("access_token", accessToken);
+  const url = `${BASE_URL}/${ownIgId}?${params.toString()}`;
+
+  const result = await safeApiCall<{ business_discovery: CompetitorPublicProfile }>(workspaceId, url);
+
+  if (result.error || !result.data?.business_discovery?.media) {
+    return { items: [], nextCursor: null, error: result.error, rateLimitInfo: result.rateLimitInfo };
+  }
+
+  const media = result.data.business_discovery.media;
+  const nextCursor = media.paging?.cursors?.after ?? null;
+  return { items: media.data ?? [], nextCursor, error: null, rateLimitInfo: result.rateLimitInfo };
 }
 
 /**

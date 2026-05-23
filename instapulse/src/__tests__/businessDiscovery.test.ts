@@ -1,5 +1,9 @@
 import { normalizeInstagramUsername } from "@/lib/instagramUtils";
-import { COMPETITOR_BUSINESS_DISCOVERY_FIELDS } from "@/services/instagramApiClient";
+import {
+  COMPETITOR_BUSINESS_DISCOVERY_FIELDS,
+  COMPETITOR_MEDIA_SUBFIELDS,
+  SYNC_MODE_LIMITS,
+} from "@/services/instagramApiClient";
 
 describe("normalizeInstagramUsername", () => {
   // Valid usernames
@@ -109,13 +113,16 @@ describe("Business Discovery query builder", () => {
 describe("COMPETITOR_BUSINESS_DISCOVERY_FIELDS regression guard", () => {
   const flatFields = COMPETITOR_BUSINESS_DISCOVERY_FIELDS.join(",");
 
-  // Required fields
+  // Required profile fields
   it("includes id", () => expect(flatFields).toContain("id"));
   it("includes username", () => expect(flatFields).toContain("username"));
   it("includes followers_count", () => expect(flatFields).toContain("followers_count"));
   it("includes media_count", () => expect(flatFields).toContain("media_count"));
+
+  // Required media fields (inside the media.limit(N){...} sub-selector)
   it("includes like_count", () => expect(flatFields).toContain("like_count"));
   it("includes comments_count", () => expect(flatFields).toContain("comments_count"));
+  it("includes view_count", () => expect(flatFields).toContain("view_count"));
   it("includes media_type", () => expect(flatFields).toContain("media_type"));
   it("includes media_product_type", () => expect(flatFields).toContain("media_product_type"));
   it("includes permalink", () => expect(flatFields).toContain("permalink"));
@@ -129,5 +136,71 @@ describe("COMPETITOR_BUSINESS_DISCOVERY_FIELDS regression guard", () => {
   it("does NOT include impressions", () => expect(flatFields).not.toContain("impressions"));
   it("does NOT include saved", () => expect(flatFields).not.toContain("saved"));
   it("does NOT include shares", () => expect(flatFields).not.toContain("shares"));
+  it("does NOT include plays", () => expect(flatFields).not.toContain("plays"));
   it("does NOT include insights", () => expect(flatFields).not.toContain("insights"));
+});
+
+describe("COMPETITOR_MEDIA_SUBFIELDS regression guard", () => {
+  it("includes view_count", () => expect(COMPETITOR_MEDIA_SUBFIELDS).toContain("view_count"));
+  it("includes like_count", () => expect(COMPETITOR_MEDIA_SUBFIELDS).toContain("like_count"));
+  it("includes comments_count", () => expect(COMPETITOR_MEDIA_SUBFIELDS).toContain("comments_count"));
+  it("does NOT include media_url", () => expect(COMPETITOR_MEDIA_SUBFIELDS).not.toContain("media_url"));
+  it("does NOT include reach", () => expect(COMPETITOR_MEDIA_SUBFIELDS).not.toContain("reach"));
+  it("does NOT include plays", () => expect(COMPETITOR_MEDIA_SUBFIELDS).not.toContain("plays"));
+});
+
+describe("Sync mode limits", () => {
+  it("daily_refresh mediaLimit = 25", () => expect(SYNC_MODE_LIMITS.daily_refresh.mediaLimit).toBe(25));
+  it("daily_refresh maxPages = 1", () => expect(SYNC_MODE_LIMITS.daily_refresh.maxPages).toBe(1));
+  it("initial_import mediaLimit = 100", () => expect(SYNC_MODE_LIMITS.initial_import.mediaLimit).toBe(100));
+  it("initial_import maxPages = 4", () => expect(SYNC_MODE_LIMITS.initial_import.maxPages).toBe(4));
+  it("manual_deep_import mediaLimit = 500", () => expect(SYNC_MODE_LIMITS.manual_deep_import.mediaLimit).toBe(500));
+  it("manual_deep_import maxPages = 20", () => expect(SYNC_MODE_LIMITS.manual_deep_import.maxPages).toBe(20));
+  it("daily_refresh cannot exceed 25 per sync", () => {
+    expect(SYNC_MODE_LIMITS.daily_refresh.mediaLimit).toBeLessThanOrEqual(25);
+    expect(SYNC_MODE_LIMITS.daily_refresh.maxPages).toBe(1);
+  });
+  it("manual_deep_import has the highest limits", () => {
+    expect(SYNC_MODE_LIMITS.manual_deep_import.mediaLimit).toBeGreaterThan(SYNC_MODE_LIMITS.initial_import.mediaLimit);
+    expect(SYNC_MODE_LIMITS.manual_deep_import.maxPages).toBeGreaterThan(SYNC_MODE_LIMITS.initial_import.maxPages);
+  });
+});
+
+describe("view_count mapping behavior", () => {
+  // These tests verify the mapping logic in isolation
+
+  function mapViewCount(item: { view_count?: number }): number | null {
+    return item.view_count ?? null;
+  }
+
+  it("VIDEO with view_count maps to non-null viewsCount", () => {
+    const item = { media_type: "VIDEO", media_product_type: "REELS", view_count: 12345 };
+    expect(mapViewCount(item)).toBe(12345);
+  });
+
+  it("REELS with view_count = 0 maps to 0 (not null)", () => {
+    const item = { media_type: "VIDEO", media_product_type: "REELS", view_count: 0 };
+    expect(mapViewCount(item)).toBe(0);
+  });
+
+  it("IMAGE without view_count stores null", () => {
+    const item = { media_type: "IMAGE", media_product_type: "FEED" };
+    expect(mapViewCount(item)).toBeNull();
+  });
+
+  it("CAROUSEL_ALBUM without view_count stores null", () => {
+    const item = { media_type: "CAROUSEL_ALBUM", media_product_type: "FEED" };
+    expect(mapViewCount(item)).toBeNull();
+  });
+
+  it("missing view_count does not throw — returns null", () => {
+    const item = {};
+    expect(() => mapViewCount(item)).not.toThrow();
+    expect(mapViewCount(item)).toBeNull();
+  });
+
+  it("view_count undefined is treated as null, not 0", () => {
+    const item = { view_count: undefined };
+    expect(mapViewCount(item)).toBeNull();
+  });
 });

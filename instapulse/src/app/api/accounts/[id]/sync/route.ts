@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { getOrCreateDefaultWorkspace } from "@/lib/workspace";
 import { db } from "@/lib/db";
 import { syncOwnAccount, syncCompetitorAccount } from "@/services/accountSyncService";
-import { isWorkspaceRateLimited, normalizeInstagramUsername } from "@/services/instagramApiClient";
+import { isWorkspaceRateLimited, normalizeInstagramUsername, CompetitorSyncMode } from "@/services/instagramApiClient";
 
 export async function POST(
   request: NextRequest,
@@ -39,9 +39,29 @@ export async function POST(
   const rawUsername = account.username;
   const normalizedUsername = isCompetitor ? (normalizeInstagramUsername(rawUsername) ?? rawUsername) : null;
 
-  const result = account.accountType === "own"
-    ? await syncOwnAccount(workspace.id, id)
-    : await syncCompetitorAccount(workspace.id, id);
+  // Parse optional syncMode from body; default to daily_refresh for manual triggers
+  let syncMode: CompetitorSyncMode = "daily_refresh";
+  try {
+    const body = await request.json() as { syncMode?: string };
+    if (body?.syncMode === "initial_import" || body?.syncMode === "daily_refresh") {
+      syncMode = body.syncMode;
+    }
+    // manual_deep_import is only allowed via the dedicated /deep-import endpoint
+  } catch { /* no body — use default */ }
+
+  if (account.accountType === "own") {
+    const result = await syncOwnAccount(workspace.id, id);
+    if (!result.success) {
+      return NextResponse.json({
+        success: false,
+        status: result.status ?? "error",
+        message: result.error ?? "Sync failed.",
+      }, { status: 500 });
+    }
+    return NextResponse.json({ success: true, mediaCount: result.mediaCount });
+  }
+
+  const result = await syncCompetitorAccount(workspace.id, id, syncMode);
 
   if (!result.success) {
     if (result.status === "requires_live_mode_or_tester") {
@@ -78,9 +98,15 @@ export async function POST(
       rawUsername,
       normalizedUsername,
       message: result.error ?? "Sync failed.",
-      hint: isCompetitor ? `Use /api/debug/business-discovery-test?username=${encodeURIComponent(rawUsername)} to diagnose.` : undefined,
+      hint: `Use /api/debug/business-discovery-test?username=${encodeURIComponent(rawUsername)} to diagnose.`,
     }, { status: 500 });
   }
 
-  return NextResponse.json({ success: true, mediaCount: result.mediaCount });
+  return NextResponse.json({
+    success: true,
+    mediaCount: result.mediaCount,
+    pagesFetched: result.pagesFetched,
+    stoppedReason: result.stoppedReason,
+    syncMode: result.syncMode ?? syncMode,
+  });
 }

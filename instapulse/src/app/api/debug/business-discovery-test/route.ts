@@ -4,15 +4,26 @@ import { authOptions } from "@/lib/auth";
 import { getOrCreateDefaultWorkspace } from "@/lib/workspace";
 import { db } from "@/lib/db";
 import { decryptToken } from "@/lib/encryption";
-import { normalizeInstagramUsername, getOwnInstagramBusinessAccountId, COMPETITOR_BUSINESS_DISCOVERY_FIELDS } from "@/services/instagramApiClient";
+import {
+  normalizeInstagramUsername,
+  getOwnInstagramBusinessAccountId,
+  fetchCompetitorMediaNextPage,
+  COMPETITOR_BUSINESS_DISCOVERY_FIELDS,
+  COMPETITOR_MEDIA_SUBFIELDS,
+  SYNC_MODE_LIMITS,
+  CompetitorSyncMode,
+  InstagramMediaItem,
+} from "@/services/instagramApiClient";
 
 const GRAPH_API_VERSION = process.env.INSTAGRAM_GRAPH_API_VERSION || "v21.0";
 const BASE_URL = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
+const VALID_SYNC_MODES: CompetitorSyncMode[] = ["daily_refresh", "initial_import", "manual_deep_import"];
+
 /**
- * GET /api/debug/business-discovery-test?username=<instagram_username>
- * Tests the Business Discovery API using the active workspace token.
- * Returns full diagnostic output — never returns the access token itself.
+ * GET /api/debug/business-discovery-test?username=<username>[&syncMode=daily_refresh|initial_import|manual_deep_import][&limit=25|100|500]
+ * Tests the Business Discovery API and returns diagnostic output.
+ * Never returns the access token.
  */
 export async function GET(request: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -33,7 +44,19 @@ export async function GET(request: NextRequest) {
     }, { status: 400 });
   }
 
-  // ─── Resolve token — prefer OAuth InstagramConnection, fall back to BYOK ─────
+  // Parse syncMode — default daily_refresh
+  const rawSyncMode = request.nextUrl.searchParams.get("syncMode") ?? "daily_refresh";
+  const syncMode: CompetitorSyncMode = VALID_SYNC_MODES.includes(rawSyncMode as CompetitorSyncMode)
+    ? (rawSyncMode as CompetitorSyncMode)
+    : "daily_refresh";
+
+  const { mediaLimit, maxPages } = SYNC_MODE_LIMITS[syncMode];
+
+  // Parse optional limit override (capped by sync mode)
+  const rawLimit = parseInt(request.nextUrl.searchParams.get("limit") ?? "0", 10);
+  const requestedLimit = rawLimit > 0 ? Math.min(rawLimit, mediaLimit) : mediaLimit;
+
+  // ─── Resolve token ─────────────────────────────────────────────────────────
 
   let accessToken: string | null = null;
   let tokenSource: "instagram_connection" | "byok_token" | "none" = "none";
@@ -85,7 +108,7 @@ export async function GET(request: NextRequest) {
     }, { status: 400 });
   }
 
-  // ─── Build request exactly as getCompetitorPublicProfile() does ───────────────
+  // ─── First page — same as getCompetitorPublicProfile ──────────────────────
 
   const profileFields = COMPETITOR_BUSINESS_DISCOVERY_FIELDS.join(",");
   const fields = `business_discovery.username(${normalizedUsername}){${profileFields}}`;
@@ -96,14 +119,16 @@ export async function GET(request: NextRequest) {
   params.set("access_token", accessToken);
   const url = `${exactEndpoint}?${params.toString()}`;
 
-  // ─── Execute ──────────────────────────────────────────────────────────────────
-
   let success = false;
   let businessDiscoveryFound = false;
   let mediaCountReturned: number | null = null;
   let firstMediaPermalink: string | null = null;
   let businessDiscoveryResult: unknown = null;
   let safeMetaError: unknown = null;
+  let pagesFetched = 0;
+  let viewCountReturned = false;
+  const allMedia: InstagramMediaItem[] = [];
+  let nextCursor: string | null = null;
 
   try {
     const res = await fetch(url);
@@ -113,7 +138,10 @@ export async function GET(request: NextRequest) {
         username?: string;
         followers_count?: number;
         media_count?: number;
-        media?: { data: Array<{ permalink?: string }> };
+        media?: {
+          data: InstagramMediaItem[];
+          paging?: { cursors?: { after?: string } };
+        };
       };
       error?: unknown;
     };
@@ -121,16 +149,18 @@ export async function GET(request: NextRequest) {
     if (res.ok && body.business_discovery) {
       success = true;
       businessDiscoveryFound = true;
+      pagesFetched = 1;
       const bd = body.business_discovery;
-      mediaCountReturned = bd.media?.data?.length ?? null;
-      firstMediaPermalink = bd.media?.data?.[0]?.permalink ?? null;
-      // Return profile without media array (it can be large)
+      const firstPage = bd.media?.data ?? [];
+      allMedia.push(...firstPage);
+      nextCursor = bd.media?.paging?.cursors?.after ?? null;
+      firstMediaPermalink = firstPage[0]?.permalink ?? null;
       businessDiscoveryResult = {
         id: bd.id,
         username: bd.username,
         followers_count: bd.followers_count,
         media_count: bd.media_count,
-        mediaInResponse: mediaCountReturned,
+        mediaInResponse: firstPage.length,
       };
     } else {
       safeMetaError = body.error ?? body;
@@ -138,6 +168,38 @@ export async function GET(request: NextRequest) {
   } catch (err) {
     safeMetaError = { message: err instanceof Error ? err.message : "Network error" };
   }
+
+  // ─── Additional pages if syncMode requires it ─────────────────────────────
+
+  if (success && nextCursor && allMedia.length < requestedLimit && maxPages > 1) {
+    while (nextCursor && allMedia.length < requestedLimit && pagesFetched < maxPages) {
+      try {
+        const pageResult = await fetchCompetitorMediaNextPage(
+          workspace.id, igBusinessAccountId, normalizedUsername, nextCursor, accessToken, 25
+        );
+        if (pageResult.error || pageResult.items.length === 0) break;
+        allMedia.push(...pageResult.items);
+        pagesFetched++;
+        nextCursor = pageResult.nextCursor;
+        if (!nextCursor) break;
+      } catch { break; }
+    }
+  }
+
+  // ─── Build mediaSample ────────────────────────────────────────────────────
+
+  mediaCountReturned = allMedia.length;
+  viewCountReturned = allMedia.some((m) => m.view_count != null);
+
+  const mediaSample = allMedia.slice(0, 10).map((m) => ({
+    id: m.id,
+    media_type: m.media_type,
+    media_product_type: m.media_product_type ?? null,
+    hasViewCount: m.view_count != null,
+    view_count: m.view_count ?? null,
+    like_count: m.like_count ?? null,
+    comments_count: m.comments_count ?? null,
+  }));
 
   return NextResponse.json({
     success,
@@ -151,12 +213,18 @@ export async function GET(request: NextRequest) {
     // Request
     rawUsername,
     normalizedUsername,
+    syncMode,
+    requestedLimit,
     exactEndpoint,
     exactFields: fields,
+    competitorMediaSubfields: COMPETITOR_MEDIA_SUBFIELDS,
     // Result
     businessDiscoveryFound,
     mediaCountReturned,
+    pagesFetched,
     firstMediaPermalink,
+    viewCountReturned,
+    mediaSample,
     businessDiscoveryResult,
     safeMetaError,
     note: "Access tokens are never returned by this endpoint.",

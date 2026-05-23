@@ -74,13 +74,77 @@ A production-ready Instagram Analytics SaaS built with Next.js 16, Prisma 7, and
 
 Unavailable metrics are stored as `null` and displayed as "Not available via Instagram API" — no fake data.
 
-### Competitor Business Discovery — field whitelist
+### Safe Competitor Business Discovery Field Whitelist
 
 Competitor sync uses the Business Discovery API with a strict field whitelist (`COMPETITOR_BUSINESS_DISCOVERY_FIELDS` in `instagramApiClient.ts`).
 
-**Allowed fields:** `id`, `username`, `name`, `biography`, `website`, `profile_picture_url`, `followers_count`, `media_count`, and per-media: `id`, `caption`, `media_type`, `media_product_type`, `permalink`, `timestamp`, `like_count`, `comments_count`.
+**Allowed profile fields:** `id`, `username`, `name`, `biography`, `website`, `profile_picture_url`, `followers_count`, `media_count`
 
-**Never add:** `follows_count`, `media_url`, `thumbnail_url`, `reach`, `impressions`, `saved`, `shares`, or any insights fields. Meta rejects the entire request if any unsupported field is included — even if all other fields are valid. Regression tests in `src/__tests__/businessDiscovery.test.ts` enforce this whitelist.
+**Allowed media fields (per post):** `id`, `caption`, `media_type`, `media_product_type`, `permalink`, `timestamp`, `like_count`, `comments_count`, `view_count`
+
+**Never add these fields — Meta rejects the entire request if any unsupported field is requested:**
+`follows_count`, `media_url`, `thumbnail_url`, `reach`, `impressions`, `saved`, `shares`, `plays`, `views`, or any insights fields.
+
+Regression tests in `src/__tests__/businessDiscovery.test.ts` enforce this whitelist — tests will fail immediately if a forbidden field is added.
+
+---
+
+### Instagram Competitor Views
+
+- Competitor views use Meta's `view_count` field, returned where available.
+- `view_count` is typically returned for some **VIDEO / REELS** competitor media.
+- **IMAGE** and **CAROUSEL_ALBUM** posts typically do not return `view_count` — this is expected and is not a sync failure.
+- Missing `view_count` is stored as `null` and displayed as "—" in the UI.
+- Competitor private metrics (reach, impressions, saves, shares, plays) are not available via any official API.
+
+UI display rules:
+- If `viewsCount` is a number → display it.
+- If `viewsCount` is `null` for Instagram competitor rows → show "—".
+- Never display 0 unless Meta explicitly returned 0.
+
+---
+
+### Instagram Competitor Sync Limits
+
+Channel Radar tracks competitor media using three sync modes:
+
+| Mode | Posts | Pages | When used |
+|---|---|---|---|
+| `daily_refresh` | 25 | 1 | Scheduled daily sync |
+| `initial_import` | 100 | 4 | When a competitor account is first added |
+| `manual_deep_import` | 500 | 20 | Manual "Import older media" trigger only |
+
+**Important constraints:**
+- Instagram competitor sync uses **Meta Business Discovery**, which fetches public profile metadata and recent available media.
+- Channel Radar starts building competitor history from the day the account is added — historical backfill is not available for periods before the first sync.
+- 500 posts is the maximum per deep import, not a guarantee — Meta pagination may end earlier.
+- Full historical backfill is not guaranteed.
+- `manual_deep_import` is never triggered automatically — it is a manual/admin-only action.
+- Meta rate limits are monitored via `X-App-Usage` and `X-Business-Use-Case-Usage` headers. Sync pauses at ≥80% usage and stops at ≥90%.
+
+---
+
+### 500-Post Instagram Deep Import
+
+The deep import fetches up to 500 competitor posts using Business Discovery cursor-based pagination.
+
+**Endpoint:** `POST /api/accounts/[id]/deep-import`
+
+**Pagination behavior:**
+- Page size: 25 posts per Business Discovery call
+- Maximum pages: 20 (up to ~500 posts)
+- Stops early when: no next cursor, rate limit ≥80%, Meta API error, or 500-post cap reached
+
+**`stoppedReason` values returned:**
+- `max_limit_reached` — collected the requested number of posts
+- `no_more_pages` — Meta has no more media for this competitor
+- `max_pages_reached` — reached the page cap for this sync mode
+- `rate_limit_high` — Meta API usage ≥80%; further calls paused
+- `meta_error` — Meta returned an error during pagination
+
+**Copy rules:**
+- Use: "Recent available media", "History starts from first sync", "Manual deep import up to 500 available posts"
+- Do not say: "Full Instagram history", "Complete historical backfill", "90-day limit", "Guaranteed 500 posts"
 
 ---
 

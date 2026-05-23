@@ -1,8 +1,20 @@
 import { db } from "@/lib/db";
 import { decryptToken } from "@/lib/encryption";
-import { getAccountProfile, getCompetitorPublicProfile, getOwnInstagramBusinessAccountId, normalizeInstagramUsername } from "./instagramApiClient";
+import {
+  getAccountProfile,
+  getCompetitorPublicProfile,
+  getOwnInstagramBusinessAccountId,
+  normalizeInstagramUsername,
+  fetchCompetitorMediaNextPage,
+  getRateLimitLevel,
+  isWorkspaceRateLimited,
+  getRecentMedia,
+  getMediaInsights,
+  CompetitorSyncMode,
+  SYNC_MODE_LIMITS,
+  InstagramMediaItem,
+} from "./instagramApiClient";
 import { extractHashtags, calcEngagementRate } from "@/lib/utils";
-import { getRecentMedia, getMediaInsights } from "./instagramApiClient";
 
 export async function syncOwnAccount(
   workspaceId: string,
@@ -238,13 +250,65 @@ async function resolveWorkspaceAccessToken(workspaceId: string): Promise<string 
   return null;
 }
 
+async function upsertCompetitorMediaItem(
+  workspaceId: string,
+  trackedAccountId: string,
+  item: InstagramMediaItem,
+  followersCount: number | null
+): Promise<void> {
+  const engRate = calcEngagementRate(
+    item.like_count ?? null,
+    item.comments_count ?? null,
+    followersCount
+  );
+  await db.mediaItem.upsert({
+    where: { trackedAccountId_instagramMediaId: { trackedAccountId, instagramMediaId: item.id } },
+    update: {
+      likeCount: item.like_count ?? null,
+      commentsCount: item.comments_count ?? null,
+      // view_count is only returned for some VIDEO / REELS; null for IMAGE / CAROUSEL_ALBUM
+      viewsCount: item.view_count ?? null,
+      engagementRate: engRate,
+      fetchedAt: new Date(),
+    },
+    create: {
+      workspaceId,
+      trackedAccountId,
+      instagramMediaId: item.id,
+      mediaType: item.media_type,
+      mediaProductType: item.media_product_type ?? null,
+      caption: item.caption ?? null,
+      permalink: item.permalink ?? null,
+      thumbnailUrl: item.thumbnail_url ?? null,
+      timestamp: new Date(item.timestamp),
+      likeCount: item.like_count ?? null,
+      commentsCount: item.comments_count ?? null,
+      viewsCount: item.view_count ?? null,
+      engagementRate: engRate,
+      hashtags: extractHashtags(item.caption),
+      // reach/impressions/saves/shares are null — not available via Business Discovery
+    },
+  });
+}
+
 export async function syncCompetitorAccount(
   workspaceId: string,
-  trackedAccountId: string
-): Promise<{ success: boolean; status?: string; error?: string; mediaCount?: number }> {
+  trackedAccountId: string,
+  syncMode: CompetitorSyncMode = "daily_refresh"
+): Promise<{
+  success: boolean;
+  status?: string;
+  error?: string;
+  mediaCount?: number;
+  pagesFetched?: number;
+  stoppedReason?: string;
+  syncMode?: CompetitorSyncMode;
+}> {
   const account = await db.trackedAccount.findUnique({ where: { id: trackedAccountId } });
   if (!account) return { success: false, error: "Account not found" };
   if (account.workspaceId !== workspaceId) return { success: false, error: "Account does not belong to this workspace" };
+
+  const { mediaLimit, maxPages } = SYNC_MODE_LIMITS[syncMode];
 
   const job = await db.syncJob.create({
     data: {
@@ -252,7 +316,8 @@ export async function syncCompetitorAccount(
       jobType: "competitor_sync",
       status: "running",
       startedAt: new Date(),
-      metadata: { trackedAccountId, username: account.username },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      metadata: { trackedAccountId, username: account.username, syncMode, requestedLimit: mediaLimit } as any,
     },
   });
 
@@ -265,7 +330,6 @@ export async function syncCompetitorAccount(
     return { success: false, error: "No active access token found. Connect your Instagram account first." };
   }
 
-  // Get our own IG Business Account ID (required for Business Discovery API)
   const ownIgUserId = await getOwnInstagramBusinessAccountId(workspaceId, accessToken);
   if (!ownIgUserId) {
     await db.syncJob.update({
@@ -276,7 +340,11 @@ export async function syncCompetitorAccount(
   }
 
   const normalizedUsername = normalizeInstagramUsername(account.username) ?? account.username;
-  const { profile, errorStatus, errorMessage: discoveryErrorMessage } = await getCompetitorPublicProfile(workspaceId, ownIgUserId, normalizedUsername, accessToken, account.fetchLimit);
+  // Always fetch first page with 25 items (standard page size); pagination handles the rest
+  const { profile, errorStatus, errorMessage: discoveryErrorMessage } = await getCompetitorPublicProfile(
+    workspaceId, ownIgUserId, normalizedUsername, accessToken, 25
+  );
+
   if (!profile) {
     if (errorStatus === "requires_live_mode_or_tester") {
       const msg = "Business Discovery is restricted while the Meta app is in Development mode. Test with app tester accounts or switch to Live mode after App Review.";
@@ -287,7 +355,7 @@ export async function syncCompetitorAccount(
           completedAt: new Date(),
           errorMessage: msg,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          metadata: { trackedAccountId, username: account.username, businessDiscoveryStatus: "requires_live_mode_or_tester" } as any,
+          metadata: { trackedAccountId, username: account.username, syncMode, businessDiscoveryStatus: "requires_live_mode_or_tester" } as any,
         },
       });
       return { success: false, status: "requires_live_mode_or_tester", error: msg };
@@ -302,10 +370,10 @@ export async function syncCompetitorAccount(
           completedAt: new Date(),
           errorMessage: msg,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          metadata: { trackedAccountId, username: account.username, businessDiscoveryStatus: errorStatus } as any,
+          metadata: { trackedAccountId, username: account.username, syncMode, businessDiscoveryStatus: errorStatus } as any,
         },
       });
-      // Do not mark account as unavailable — the username may just need correcting
+      // Do not mark account as unavailable — username may just need correcting
       return { success: false, status: errorStatus, error: msg };
     }
 
@@ -334,7 +402,7 @@ export async function syncCompetitorAccount(
     },
   });
 
-  // Save daily snapshot (followers only — no private insights for competitors)
+  // Daily snapshot (followers only — no private insights for competitors)
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   await db.accountSnapshot.upsert({
@@ -349,51 +417,81 @@ export async function syncCompetitorAccount(
     },
   });
 
-  // Upsert public media items (no insights — reach/impressions/saves not available)
+  // ─── Collect media across pages ───────────────────────────────────────────
+
+  const allMedia: InstagramMediaItem[] = [...(profile.media?.data ?? [])];
+  let pagesFetched = 1;
+  let nextCursor: string | null = profile.media?.paging?.cursors?.after ?? null;
+  let stoppedReason: string;
+
+  if (!nextCursor || allMedia.length >= mediaLimit) {
+    stoppedReason = allMedia.length >= mediaLimit ? "max_limit_reached" : "no_more_pages";
+  } else if (maxPages <= 1) {
+    stoppedReason = "max_pages_reached";
+  } else {
+    stoppedReason = "max_pages_reached";
+
+    while (nextCursor && allMedia.length < mediaLimit && pagesFetched < maxPages) {
+      const rateLimited = await isWorkspaceRateLimited(workspaceId);
+      if (rateLimited) { stoppedReason = "rate_limit_high"; break; }
+
+      const pageResult = await fetchCompetitorMediaNextPage(
+        workspaceId, ownIgUserId, normalizedUsername, nextCursor, accessToken, 25
+      );
+
+      if (pageResult.error) { stoppedReason = "meta_error"; break; }
+
+      if (pageResult.rateLimitInfo) {
+        const level = getRateLimitLevel(pageResult.rateLimitInfo);
+        if (level === "pause" || level === "stop") { stoppedReason = "rate_limit_high"; break; }
+      }
+
+      allMedia.push(...pageResult.items);
+      pagesFetched++;
+      nextCursor = pageResult.nextCursor;
+
+      if (!nextCursor) { stoppedReason = "no_more_pages"; break; }
+      if (allMedia.length >= mediaLimit) { stoppedReason = "max_limit_reached"; break; }
+    }
+  }
+
+  // ─── Upsert collected media ───────────────────────────────────────────────
+
   let synced = 0;
-  for (const item of profile.media?.data ?? []) {
-    const engRate = calcEngagementRate(
-      item.like_count ?? null,
-      item.comments_count ?? null,
-      profile.followers_count ?? null
-    );
-    await db.mediaItem.upsert({
-      where: { trackedAccountId_instagramMediaId: { trackedAccountId, instagramMediaId: item.id } },
-      update: {
-        likeCount: item.like_count ?? null,
-        commentsCount: item.comments_count ?? null,
-        engagementRate: engRate,
-        fetchedAt: new Date(),
-      },
-      create: {
-        workspaceId,
-        trackedAccountId,
-        instagramMediaId: item.id,
-        mediaType: item.media_type,
-        caption: item.caption ?? null,
-        permalink: item.permalink ?? null,
-        thumbnailUrl: item.thumbnail_url ?? null,
-        timestamp: new Date(item.timestamp),
-        likeCount: item.like_count ?? null,
-        commentsCount: item.comments_count ?? null,
-        engagementRate: engRate,
-        hashtags: extractHashtags(item.caption),
-        // reach/impressions/saves/shares are null — not available via Business Discovery
-      },
-    });
+  const mediaToStore = allMedia.slice(0, mediaLimit);
+  for (const item of mediaToStore) {
+    await upsertCompetitorMediaItem(workspaceId, trackedAccountId, item, profile.followers_count ?? null);
     synced++;
   }
+
+  const timestamps = mediaToStore
+    .map((m) => new Date(m.timestamp).getTime())
+    .filter((t) => !isNaN(t));
+  const oldestFetchedTimestamp = timestamps.length ? new Date(Math.min(...timestamps)).toISOString() : null;
+  const newestFetchedTimestamp = timestamps.length ? new Date(Math.max(...timestamps)).toISOString() : null;
 
   await db.syncJob.update({
     where: { id: job.id },
     data: {
       status: "completed",
       completedAt: new Date(),
-      metadata: { trackedAccountId, username: account.username, mediaCount: synced },
+      metadata: {
+        trackedAccountId,
+        username: account.username,
+        syncMode,
+        requestedLimit: mediaLimit,
+        fetchedMediaCount: allMedia.length,
+        upsertedMediaCount: synced,
+        pagesFetched,
+        oldestFetchedTimestamp,
+        newestFetchedTimestamp,
+        stoppedReason,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
     },
   });
 
-  return { success: true, mediaCount: synced };
+  return { success: true, mediaCount: synced, pagesFetched, stoppedReason, syncMode };
 }
 
 export async function syncWorkspace(workspaceId: string): Promise<{
