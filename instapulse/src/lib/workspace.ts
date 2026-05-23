@@ -1,7 +1,6 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { seedDemoData } from "@/lib/demoSeed";
 
 export async function getSessionUser() {
   const session = await getServerSession(authOptions);
@@ -42,10 +41,6 @@ export async function getOrCreateDefaultWorkspace(userId: string, userName?: str
       },
     },
   });
-
-  if (process.env.DEMO_MODE === "true") {
-    await seedDemoData(workspace.id);
-  }
 
   return workspace;
 }

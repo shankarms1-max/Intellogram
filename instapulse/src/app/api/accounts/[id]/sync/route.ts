@@ -10,10 +10,6 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  if (process.env.DEMO_MODE === "true") {
-    return NextResponse.json({ error: "Sync is disabled in demo mode" }, { status: 403 });
-  }
-
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

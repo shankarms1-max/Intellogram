@@ -28,7 +28,7 @@ export async function GET(req: Request) {
   return new NextResponse(csv, {
     headers: {
       "Content-Type": "text/csv",
-      "Content-Disposition": `attachment; filename="instapulse-media-${new Date().toISOString().split("T")[0]}.csv"`,
+      "Content-Disposition": `attachment; filename="channel-radar-media-${new Date().toISOString().split("T")[0]}.csv"`,
     },
   });
 }

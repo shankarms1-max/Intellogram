@@ -6,10 +6,6 @@ import { syncWorkspace } from "@/services/accountSyncService";
 import { isWorkspaceRateLimited } from "@/services/instagramApiClient";
 
 export async function POST(_req: Request) {
-  if (process.env.DEMO_MODE === "true") {
-    return NextResponse.json({ error: "Sync is disabled in demo mode" }, { status: 403 });
-  }
-
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const user = session.user as { id: string; name?: string | null };

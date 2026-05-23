@@ -52,7 +52,7 @@ export function Sidebar() {
         <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-violet-600 to-pink-500 flex items-center justify-center">
           <Zap className="h-4 w-4 text-white" />
         </div>
-        <span className="font-bold text-lg tracking-tight">InstaPulse</span>
+        <span className="font-bold text-lg tracking-tight">Channel Radar</span>
       </div>
 
       <nav className="flex-1 px-3 py-4 space-y-4">

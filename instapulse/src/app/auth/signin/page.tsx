@@ -94,9 +94,6 @@ function SignInForm() {
           </Link>
         </p>
 
-        <div className="mt-4 rounded-md bg-blue-50 border border-blue-200 px-3 py-2 text-xs text-blue-700">
-          <strong>Demo:</strong> demo@instapulse.app / demo1234
-        </div>
       </CardContent>
     </Card>
   );
@@ -111,7 +108,7 @@ export default function SignInPage() {
             <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-violet-600 to-pink-500 flex items-center justify-center">
               <Zap className="h-5 w-5 text-white" />
             </div>
-            <span className="font-bold text-xl">InstaPulse</span>
+            <span className="font-bold text-xl">Channel Radar</span>
           </Link>
         </div>
         <Suspense fallback={<div className="h-64 rounded-xl border border-border animate-pulse bg-muted" />}>

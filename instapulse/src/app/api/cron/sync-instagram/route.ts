@@ -3,23 +3,7 @@ import { db } from "@/lib/db";
 import { syncOwnAccount } from "@/services/accountSyncService";
 import { isWorkspaceRateLimited } from "@/services/instagramApiClient";
 
-/**
- * GET /api/cron/sync-instagram
- *
- * Scheduled cron endpoint — call from Vercel Cron or an external scheduler.
- * Must pass CRON_SECRET as Authorization: Bearer <secret> header.
- *
- * Vercel cron.json example:
- *   { "crons": [{ "path": "/api/cron/sync-instagram", "schedule": "0 6 * * *" }] }
- *
- * Set CRON_SECRET env var to a random secret (openssl rand -hex 32).
- */
 export async function GET(request: NextRequest) {
-  // Skip entirely in demo mode
-  if (process.env.DEMO_MODE === "true") {
-    return NextResponse.json({ skipped: true, reason: "demo_mode" });
-  }
-
   // Verify CRON_SECRET
   const cronSecret = process.env.CRON_SECRET;
   if (!cronSecret) {

@@ -104,9 +104,6 @@ export default function SettingsPage() {
     }
   }
 
-  // API config status is read from env vars at build time — approximate from what's visible
-  const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
-
   const redirectUri =
     typeof window !== "undefined"
       ? `${window.location.origin}/api/auth/meta/callback`
@@ -266,23 +263,11 @@ export default function SettingsPage() {
           </div>
           <Separator />
           <div className="flex items-center gap-2 text-sm">
-            {isDemoMode ? (
-              <>
-                <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
-                <span>Demo Mode is <strong>active</strong> — using mock data.</span>
-                <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-xs ml-auto">
-                  Demo
-                </Badge>
-              </>
-            ) : (
-              <>
-                <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
-                <span>Demo Mode is <strong>off</strong> — live API enabled.</span>
-                <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-xs ml-auto">
-                  Live
-                </Badge>
-              </>
-            )}
+            <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+            <span>Live API mode — using real Instagram data.</span>
+            <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-xs ml-auto">
+              Live
+            </Badge>
           </div>
         </CardContent>
       </Card>
@@ -346,10 +331,10 @@ export default function SettingsPage() {
           <div className="flex items-start gap-3 rounded-lg bg-red-50 border border-red-200 px-4 py-3">
             <AlertTriangle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-medium text-red-700">Demo Data Reset</p>
+              <p className="text-sm font-medium text-red-700">Delete All Workspace Data</p>
               <p className="text-xs text-red-600 mt-0.5">
-                This workspace will be cleared on demo reset. All tracked accounts, media, and
-                reports will be permanently deleted. This action cannot be undone.
+                All tracked accounts, media, snapshots, and reports in this workspace will be
+                permanently deleted. This action cannot be undone.
               </p>
             </div>
           </div>

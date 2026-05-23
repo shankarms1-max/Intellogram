@@ -3,7 +3,6 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { slugify } from "@/lib/utils";
-import { seedDemoData } from "@/lib/demoSeed";
 
 const schema = z.object({
   name: z.string().min(1).max(100),
@@ -38,10 +37,6 @@ export async function POST(req: Request) {
         },
       },
     });
-
-    if (process.env.DEMO_MODE === "true") {
-      await seedDemoData(workspace.id);
-    }
 
     return NextResponse.json({ userId: user.id, workspaceId: workspace.id }, { status: 201 });
   } catch (err) {

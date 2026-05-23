@@ -115,7 +115,7 @@ const faqItems = [
   },
   {
     q: "Is Meta API quota unlimited?",
-    a: "No. Meta applies dynamic rate limits per app and per user. InstaPulse logs API usage headers (X-App-Usage) after each call and automatically pauses sync when usage is high. Agencies can use their own Meta App to isolate quota.",
+    a: "No. Meta applies dynamic rate limits per app and per user. Channel Radar logs API usage headers (X-App-Usage) after each call and automatically pauses sync when usage is high. Agencies can use their own Meta App to isolate quota.",
   },
   {
     q: "Should every user bring their own Meta App?",
@@ -126,7 +126,7 @@ const faqItems = [
     a: "No. Competitor private metrics — reach, impressions, saves, shares, story insights, and audience demographics — are not available through the official Instagram API regardless of which Meta App credentials are used.",
   },
   {
-    q: "Can InstaPulse help set up a BYO Meta App?",
+    q: "Can Channel Radar help set up a BYO Meta App?",
     a: "Yes. Agency and enterprise onboarding can include assisted Meta API setup. We help configure your Meta Developer App, OAuth redirect URI, and permissions. Meta App Review approval timelines are controlled by Meta and cannot be guaranteed.",
   },
 ];
@@ -141,7 +141,7 @@ export default function LandingPage() {
             <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-violet-600 to-pink-500 flex items-center justify-center">
               <Zap className="h-4 w-4 text-white" />
             </div>
-            <span className="font-bold text-lg">InstaPulse</span>
+            <span className="font-bold text-lg">Channel Radar</span>
           </Link>
           <div className="flex items-center gap-3">
             <Link href="/auth/signin">
@@ -179,14 +179,15 @@ export default function LandingPage() {
                 Start for free <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             </Link>
-            <Link href="/dashboard">
+            <Link href="/dashboard/connect">
               <Button variant="outline" size="lg" className="px-8">
-                View demo dashboard
+                <Aperture className="mr-2 h-4 w-4" />
+                Connect Instagram
               </Button>
             </Link>
           </div>
           <p className="text-sm text-gray-500 mt-4">
-            No credit card required · Demo data included · Connect Instagram in 2 minutes
+            No credit card required · Connect Instagram in 2 minutes
           </p>
         </div>
       </section>
@@ -196,7 +197,7 @@ export default function LandingPage() {
         <div className="max-w-4xl mx-auto flex items-start gap-3">
           <AlertTriangle className="h-5 w-5 text-amber-600 mt-0.5 shrink-0" />
           <p className="text-sm text-amber-800">
-            <strong>Instagram API Reality:</strong> InstaPulse uses official Meta Instagram APIs
+            <strong>Instagram API Reality:</strong> Channel Radar uses official Meta Instagram APIs
             only. Detailed insights (reach, impressions, saves) are only available for your own
             connected Business/Creator accounts. Competitor data is limited to publicly available
             metrics. We clearly indicate when metrics are unavailable via the API.
@@ -312,7 +313,7 @@ export default function LandingPage() {
                 <h3 className="text-lg font-bold text-gray-900">Enterprise</h3>
                 <p className="text-gray-600 text-sm mt-1">Dedicated BYO Meta App setup, assisted onboarding, usage isolation, custom sync limits, and App Review preparation support. Contact us for pricing.</p>
               </div>
-              <Link href="mailto:hello@instapulse.app" className="shrink-0">
+              <Link href="mailto:hello@channelradar.app" className="shrink-0">
                 <Button variant="outline">Contact sales</Button>
               </Link>
             </div>
@@ -376,7 +377,7 @@ export default function LandingPage() {
             <div className="h-6 w-6 rounded bg-gradient-to-br from-violet-600 to-pink-500 flex items-center justify-center">
               <Zap className="h-3.5 w-3.5 text-white" />
             </div>
-            <span className="font-semibold text-sm">InstaPulse Analytics</span>
+            <span className="font-semibold text-sm">Channel Radar Analytics</span>
           </div>
           <p className="text-xs text-gray-500 text-center">
             Uses official Instagram APIs. Available metrics depend on Meta API permissions. Not
@@ -386,7 +387,7 @@ export default function LandingPage() {
             <Link href="/privacy" className="hover:text-gray-600 underline">Privacy</Link>
             <Link href="/terms" className="hover:text-gray-600 underline">Terms</Link>
             <Link href="/data-deletion" className="hover:text-gray-600 underline">Data Deletion</Link>
-            <span>© 2025 InstaPulse</span>
+            <span>© 2025 Channel Radar</span>
           </div>
         </div>
       </footer>

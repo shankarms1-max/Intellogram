@@ -1,9 +1,9 @@
 import Link from "next/link";
 
-export const metadata = { title: "Data Deletion | InstaPulse Analytics" };
+export const metadata = { title: "Data Deletion | Channel Radar" };
 
 export default function DataDeletionPage() {
-  const contactEmail = process.env.SUPPORT_EMAIL || "privacy@instapulse.example.com";
+  const contactEmail = process.env.SUPPORT_EMAIL || "privacy@channelradar.app";
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-12 prose prose-slate">
@@ -13,11 +13,11 @@ export default function DataDeletionPage() {
       </p>
 
       <h2>How to Delete Your Data</h2>
-      <p>You can remove your data from InstaPulse Analytics in two ways:</p>
+      <p>You can remove your data from Channel Radar in two ways:</p>
 
       <h3>Option 1 — Delete Your Account</h3>
       <ol>
-        <li>Sign in to your InstaPulse account</li>
+        <li>Sign in to your Channel Radar account</li>
         <li>
           Go to{" "}
           <Link href="/dashboard/settings" className="underline">
@@ -50,7 +50,7 @@ export default function DataDeletionPage() {
 
       <h2>Revoking Instagram App Access</h2>
       <p>
-        You can also revoke InstaPulse&apos;s access to your Instagram/Facebook data directly from
+        You can also revoke Channel Radar&apos;s access to your Instagram/Facebook data directly from
         Meta:
       </p>
       <ol>
@@ -65,11 +65,11 @@ export default function DataDeletionPage() {
             Facebook Settings → Apps and Websites
           </a>
         </li>
-        <li>Find InstaPulse Analytics and click <strong>Remove</strong></li>
+        <li>Find Channel Radar and click <strong>Remove</strong></li>
       </ol>
       <p>
         Revoking access in Meta settings invalidates the access token but does not delete your
-        InstaPulse account or stored analytics data. Use Option 1 or 2 above for full deletion.
+        Channel Radar account or stored analytics data. Use Option 1 or 2 above for full deletion.
       </p>
 
       <h2>Contact</h2>

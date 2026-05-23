@@ -97,8 +97,6 @@ export default function ConnectPage() {
   const [loadingConnections, setLoadingConnections] = useState(true);
   const [activeTab, setActiveTab] = useState<CredentialMode>("managed");
 
-  const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
-
   const fetchCredential = useCallback(async () => {
     setLoadingCredential(true);
     try {
@@ -179,19 +177,6 @@ export default function ConnectPage() {
         </div>
       )}
 
-      {/* Demo mode notice */}
-      {isDemoMode && (
-        <div className="flex items-start gap-3 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3">
-          <AlertTriangle className="h-5 w-5 text-amber-600 mt-0.5 shrink-0" />
-          <div className="text-sm">
-            <p className="font-medium text-amber-800">Demo Mode Active</p>
-            <p className="text-amber-700 mt-0.5">
-              OAuth connections are disabled. Configure Meta API credentials to enable live Instagram data.
-            </p>
-          </div>
-        </div>
-      )}
-
       {/* API reality notice */}
       <div className="flex items-start gap-3 rounded-lg bg-blue-50 border border-blue-200 px-4 py-3">
         <Info className="h-5 w-5 text-blue-600 mt-0.5 shrink-0" />
@@ -225,7 +210,6 @@ export default function ConnectPage() {
           <ManagedOAuthPanel
             credential={credential}
             loadingCredential={loadingCredential}
-            isDemoMode={isDemoMode}
             onSaved={fetchCredential}
           />
         </TabsContent>
@@ -235,7 +219,6 @@ export default function ConnectPage() {
           <ByokAppPanel
             credential={credential}
             loadingCredential={loadingCredential}
-            isDemoMode={isDemoMode}
             onSaved={fetchCredential}
           />
         </TabsContent>
@@ -245,7 +228,6 @@ export default function ConnectPage() {
           <ByokTokenPanel
             credential={credential}
             loadingCredential={loadingCredential}
-            isDemoMode={isDemoMode}
             onSaved={() => { fetchCredential(); fetchConnections(); }}
           />
         </TabsContent>
@@ -302,12 +284,10 @@ export default function ConnectPage() {
 function ManagedOAuthPanel({
   credential,
   loadingCredential,
-  isDemoMode,
   onSaved,
 }: {
   credential: CredentialConfig | null;
   loadingCredential: boolean;
-  isDemoMode: boolean;
   onSaved: () => void;
 }) {
   const [connecting, setConnecting] = useState(false);
@@ -372,7 +352,7 @@ function ManagedOAuthPanel({
           </div>
         </div>
         <CardDescription>
-          Recommended for most users. Connect your Instagram Business/Creator account using InstaPulse&apos;s managed Meta App. No Meta Developer account required.
+          Recommended for most users. Connect your Instagram Business/Creator account using Channel Radar&apos;s managed Meta App. No Meta Developer account required.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -424,7 +404,7 @@ function ManagedOAuthPanel({
           )}
           <Button
             onClick={handleConnect}
-            disabled={connecting || isDemoMode || !platformConfigured}
+            disabled={connecting || !platformConfigured}
             size="sm"
           >
             {connecting ? <><Loader2 className="h-4 w-4 animate-spin" /> Redirecting…</> : <><Aperture className="h-4 w-4" /> Connect with Instagram <ExternalLink className="h-3.5 w-3.5 ml-1 opacity-60" /></>}
@@ -442,12 +422,10 @@ function ManagedOAuthPanel({
 function ByokAppPanel({
   credential,
   loadingCredential,
-  isDemoMode,
   onSaved,
 }: {
   credential: CredentialConfig | null;
   loadingCredential: boolean;
-  isDemoMode: boolean;
   onSaved: () => void;
 }) {
   const [appId, setAppId] = useState("");
@@ -681,7 +659,7 @@ function ByokAppPanel({
                   type="button"
                   size="sm"
                   onClick={handleConnect}
-                  disabled={connecting || isDemoMode}
+                  disabled={connecting}
                 >
                   {connecting ? <><Loader2 className="h-4 w-4 animate-spin" /> Redirecting…</> : <><Aperture className="h-4 w-4" /> Connect with Instagram <ExternalLink className="h-3.5 w-3.5 ml-1 opacity-60" /></>}
                 </Button>
@@ -721,12 +699,10 @@ function ByokAppPanel({
 function ByokTokenPanel({
   credential,
   loadingCredential,
-  isDemoMode,
   onSaved,
 }: {
   credential: CredentialConfig | null;
   loadingCredential: boolean;
-  isDemoMode: boolean;
   onSaved: () => void;
 }) {
   const [token, setToken] = useState("");
@@ -935,7 +911,7 @@ function ByokTokenPanel({
           <Button
             type="submit"
             size="sm"
-            disabled={saving || isDemoMode || loadingCredential}
+            disabled={saving || loadingCredential}
           >
             {saving ? <><Loader2 className="h-4 w-4 animate-spin" /> Validating…</> : <><BadgeCheck className="h-4 w-4" /> Validate &amp; Save Token</>}
           </Button>

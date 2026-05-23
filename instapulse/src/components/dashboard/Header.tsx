@@ -31,7 +31,7 @@ export function Header({ workspaceName }: HeaderProps) {
         <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-violet-600 to-pink-500 flex items-center justify-center">
           <Zap className="h-3.5 w-3.5 text-white" />
         </div>
-        <span className="font-bold text-base tracking-tight">InstaPulse</span>
+        <span className="font-bold text-base tracking-tight">Channel Radar</span>
       </div>
 
       <div className="hidden md:flex items-center gap-2 text-sm text-muted-foreground">

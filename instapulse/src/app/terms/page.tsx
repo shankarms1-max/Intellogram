@@ -1,10 +1,10 @@
 import Link from "next/link";
 
-export const metadata = { title: "Terms of Service | InstaPulse Analytics" };
+export const metadata = { title: "Terms of Service | Channel Radar" };
 
 export default function TermsPage() {
-  const appName = "InstaPulse Analytics";
-  const contactEmail = process.env.SUPPORT_EMAIL || "legal@instapulse.example.com";
+  const appName = "Channel Radar";
+  const contactEmail = process.env.SUPPORT_EMAIL || "legal@channelradar.app";
   const lastUpdated = "2025-05-16";
 
   return (

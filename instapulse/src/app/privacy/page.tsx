@@ -1,10 +1,10 @@
 import Link from "next/link";
 
-export const metadata = { title: "Privacy Policy | InstaPulse Analytics" };
+export const metadata = { title: "Privacy Policy | Channel Radar" };
 
 export default function PrivacyPage() {
-  const appName = "InstaPulse Analytics";
-  const contactEmail = process.env.SUPPORT_EMAIL || "privacy@instapulse.example.com";
+  const appName = "Channel Radar";
+  const contactEmail = process.env.SUPPORT_EMAIL || "privacy@channelradar.app";
   const lastUpdated = "2025-05-16";
 
   return (

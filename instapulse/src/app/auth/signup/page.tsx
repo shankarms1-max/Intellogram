@@ -55,7 +55,7 @@ export default function SignUpPage() {
             <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-violet-600 to-pink-500 flex items-center justify-center">
               <Zap className="h-5 w-5 text-white" />
             </div>
-            <span className="font-bold text-xl">InstaPulse</span>
+            <span className="font-bold text-xl">Channel Radar</span>
           </Link>
         </div>
 
