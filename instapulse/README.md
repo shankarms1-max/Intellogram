@@ -245,21 +245,29 @@ The cron route:
 
 ## Meta App Review Checklist
 
-Before submitting for Meta App Review to get `instagram_manage_insights` approved:
+Before submitting for Meta App Review to unlock `instagram_manage_insights` and enable public competitor sync:
 
 - [ ] Privacy Policy URL set in App settings → pointing to `/privacy`
 - [ ] Terms of Service URL set in App settings → pointing to `/terms`
 - [ ] Data Deletion callback URL set → pointing to `/data-deletion`
 - [ ] App Icon and App Description filled in
 - [ ] Valid OAuth Redirect URI matches production URL exactly
-- [ ] Demo video showing the OAuth connect flow and dashboard
-- [ ] Confirmed that you only request permissions you actually use
-- [ ] `instagram_basic` — used for profile data
-- [ ] `instagram_manage_insights` — used for reach/impressions/saves on own media
-- [ ] `pages_read_engagement` — used to link Facebook Pages to Instagram accounts
-- [ ] `pages_show_list` — used to discover linked pages via `/me/accounts`
-- [ ] App is in Live mode (not Development mode) before submission
-- [ ] Test with a non-admin test user account
+- [ ] Complete Meta Business Verification if prompted
+- [ ] Demo video showing:
+  - User login and Instagram OAuth connection
+  - Own account analytics (profile, media, insights)
+  - Business Discovery competitor comparison
+  - Data deletion page
+- [ ] Permissions to request:
+  - [ ] `instagram_basic` — used for profile data
+  - [ ] `instagram_manage_insights` — used for reach/impressions/saves on own media
+  - [ ] `pages_read_engagement` — used to link Facebook Pages to Instagram accounts
+  - [ ] `pages_show_list` — used to discover linked pages via `/me/accounts`
+  - [ ] `business_management` — used to discover pages via Business Manager (New Pages Experience)
+- [ ] App is in Live mode after approval
+- [ ] Test with a real public Instagram Business/Creator competitor account
+
+> Meta controls App Review timelines and approval decisions. Approval cannot be guaranteed by the app.
 
 ---
 
@@ -279,15 +287,54 @@ Before submitting for Meta App Review to get `instagram_manage_insights` approve
 
 ---
 
+## Business Discovery in Development vs Live Mode
+
+Own Instagram account sync works once OAuth and IG Business Account discovery are configured correctly. Business Discovery for **public competitors** is more restricted.
+
+### Why public competitor sync may fail in Development mode
+
+In Development mode, Meta restricts the Business Discovery API to Instagram accounts connected to app roles/testers. Public competitor accounts such as large brands or creators will fail with a spurious `(#100) The parameter username is required.` error even when the username IS provided. **This is a Meta platform restriction, not a code bug.**
+
+### App mode capability matrix
+
+| Capability | Development mode | Live mode + approved permissions |
+|---|---|---|
+| Own account profile & media | Works for connected tester/admin accounts | Works for all connected accounts |
+| Own account insights (reach, saves) | Works for connected tester/admin accounts | Works for all connected accounts |
+| Competitor public profile & media | App tester/role accounts only | Works where Business Discovery supports the target |
+| Competitor reach / saves / shares | Not available (private metrics) | Not available (private metrics) |
+
+### How to test competitor sync in Development mode
+
+1. Create or use another Instagram Business/Creator account.
+2. Link that account to a Facebook Page.
+3. Add the Facebook user who owns that account as an app tester/developer/admin in Meta App Dashboard → Roles.
+4. Have the user accept the invitation at [developers.facebook.com](https://developers.facebook.com).
+5. Use that Instagram username as the competitor handle.
+6. Run competitor sync.
+
+> Public accounts like @natgeo will not work in Development mode unless they are connected to an app role/tester account.
+
+### Recommended current rollout
+
+- Keep Instagram own-account analytics enabled — it works independently of app mode.
+- Keep competitor sync in the app — it is core to the product.
+- Show "Requires Meta Live access" when public competitor sync is blocked by Dev mode.
+- Test competitor sync with a tester account to confirm the integration works end-to-end.
+- Prepare Meta App Review for production competitor tracking.
+
+---
+
 ## Known Limitations
 
 1. **Competitor private metrics** — Instagram API only returns public data for non-connected accounts
-2. **Token expiry** — Long-lived tokens expire in ~60 days; BYO Token mode requires manual refresh
-3. **Rate limits** — Meta Graph API enforces per-app quotas; sync pauses automatically at ≥90%
-4. **Historical data** — Only recent media is fetched after connection; historical posts not backfilled
-5. **Stories** — Story insights require special time-windowed API access; not currently implemented
-6. **Personal accounts** — Only Business/Creator accounts can connect to the Graph API
-7. **App Review** — `instagram_manage_insights` requires Meta App Review before use in production
+2. **Competitor sync in Development mode** — Public competitors are blocked; only app tester/role accounts work until app is switched to Live mode after App Review
+3. **Token expiry** — Long-lived tokens expire in ~60 days; BYO Token mode requires manual refresh
+4. **Rate limits** — Meta Graph API enforces per-app quotas; sync pauses automatically at ≥90%
+5. **Historical data** — Only recent media is fetched after connection; historical posts not backfilled
+6. **Stories** — Story insights require special time-windowed API access; not currently implemented
+7. **Personal accounts** — Only Business/Creator accounts can connect to the Graph API
+8. **App Review** — `instagram_manage_insights` requires Meta App Review before use in production
 
 ---
 

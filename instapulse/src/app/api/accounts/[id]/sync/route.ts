@@ -44,6 +44,21 @@ export async function POST(
     : await syncCompetitorAccount(workspace.id, id);
 
   if (!result.success) {
+    if (result.status === "requires_live_mode_or_tester") {
+      return NextResponse.json({
+        success: false,
+        status: "requires_live_mode_or_tester",
+        message: "Competitor sync requires Meta Live access.",
+        details:
+          "Your Instagram connection is working, but Meta restricts Business Discovery in Development mode to app tester/role accounts. To sync public competitors, complete Meta App Review, switch the app to Live mode, and ensure the required permissions are approved.",
+        ownSyncAvailable: true,
+        recommendedActions: [
+          "Test with an app tester Instagram account",
+          "Prepare Meta App Review",
+          "Switch app to Live mode after approval",
+        ],
+      });
+    }
     return NextResponse.json({ error: result.error }, { status: 500 });
   }
 

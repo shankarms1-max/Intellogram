@@ -5,8 +5,6 @@ const GRAPH_API_VERSION = process.env.INSTAGRAM_GRAPH_API_VERSION || "v21.0";
 const BASE_URL = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
 // ─── Rate-limit thresholds ────────────────────────────────────────────────────
-// Meta X-App-Usage reports call_count / total_cputime / total_time as % of quota.
-// We pick the highest of the three to determine severity.
 
 export type RateLimitLevel = "ok" | "warn" | "pause" | "stop";
 
@@ -23,7 +21,6 @@ export function getRateLimitLevel(rateLimitInfo: Record<string, unknown>): RateL
   return "ok";
 }
 
-/** Updates WorkspaceCredential.status to rate_limited when the workspace hits 90%+ quota. */
 async function applyRateLimitStatus(
   workspaceId: string,
   rateLimitInfo: Record<string, unknown>
@@ -77,6 +74,49 @@ export const InstagramMetricCapability = {
 
 export type MetricAvailability = true | false | "only_if_public_api" | "only_if_api_available";
 
+export type BusinessDiscoveryStatus =
+  | "available"
+  | "requires_live_mode_or_tester"
+  | "setup_required"
+  | "missing_permissions"
+  | "rate_limited"
+  | "competitor_not_discoverable"
+  | "unknown_error";
+
+/**
+ * Classifies a Meta Business Discovery error message into a structured status.
+ * Meta returns "(#100) The parameter username is required." when Business Discovery
+ * is blocked by app Development mode — even when the username IS provided.
+ */
+export function classifyBusinessDiscoveryError(errorMessage: string | null): BusinessDiscoveryStatus {
+  if (!errorMessage) return "unknown_error";
+  const msg = errorMessage.toLowerCase();
+
+  // Development mode / tester gating: Meta surfaces this as a spurious "parameter required" error
+  if (msg.includes("parameter username is required") || msg.includes("unsupported get request")) {
+    return "requires_live_mode_or_tester";
+  }
+  // Missing permissions / OAuth errors
+  if (
+    msg.includes("missing permissions") ||
+    msg.includes("permissions error") ||
+    msg.includes("application does not have permission") ||
+    msg.includes("cannot be loaded due to missing permissions") ||
+    msg.includes("oauthexception")
+  ) {
+    return "missing_permissions";
+  }
+  // Rate limiting
+  if (msg.includes("rate limit") || msg.includes("too many calls") || msg.includes("user request limit")) {
+    return "rate_limited";
+  }
+  // Account is private, personal, or invalid
+  if (msg.includes("object does not exist") || msg.includes("does not exist") || msg.includes("not found")) {
+    return "competitor_not_discoverable";
+  }
+  return "unknown_error";
+}
+
 export interface InstagramAccountProfile {
   id: string;
   username: string;
@@ -118,7 +158,6 @@ export interface ApiCallResult<T> {
   rateLimitInfo?: Record<string, unknown>;
 }
 
-/** Parsed Meta rate limit headers captured per call. */
 export interface MetaRateLimitInfo {
   appUsage?: { call_count: number; total_cputime: number; total_time: number };
   businessUsage?: Record<string, unknown>;
@@ -126,6 +165,9 @@ export interface MetaRateLimitInfo {
 
 export interface TokenValidationResult {
   valid: boolean;
+  /** Facebook user ID from /me */
+  metaUserId: string | null;
+  /** Instagram Business/Creator Account ID discovered from /me/accounts */
   instagramUserId: string | null;
   instagramUsername: string | null;
   igBusinessAccountId: string | null;
@@ -185,7 +227,7 @@ async function logApiCall(
       },
     });
   } catch {
-    // Non-blocking — log failures must never crash a sync
+    // Non-blocking
   }
 }
 
@@ -231,7 +273,6 @@ export async function safeApiCall<T>(
   }
 }
 
-/** Returns true if this workspace's rate-limit status is "stop" (≥90%). Callers should skip sync. */
 export async function isWorkspaceRateLimited(workspaceId: string): Promise<boolean> {
   try {
     const cred = await db.workspaceCredential.findUnique({ where: { workspaceId } });
@@ -241,7 +282,7 @@ export async function isWorkspaceRateLimited(workspaceId: string): Promise<boole
   }
 }
 
-// ─── Token exchange (accepts dynamic app credentials) ─────────────────────────
+// ─── Token exchange ───────────────────────────────────────────────────────────
 
 export async function exchangeCodeForToken(
   code: string,
@@ -282,27 +323,40 @@ export async function getLongLivedToken(
   return { accessToken: data.access_token, expiresIn: data.expires_in || 5184000 };
 }
 
-// ─── Token validation (no workspace logging — used pre-connection) ────────────
+// ─── Token validation ─────────────────────────────────────────────────────────
 
 /**
- * Validates a Meta access token and returns profile + permission info.
- * Uses /me and /me/permissions which work without debug_token app secret.
- * Falls back to debug_token if appId + appSecret are provided (more info).
+ * Validates a Meta (Facebook) access token.
+ * Returns metaUserId (Facebook user ID) separately from instagramUserId
+ * (IG Business/Creator Account ID discovered via /me/accounts).
  */
 export async function validateAccessToken(
   token: string,
   appId?: string,
   appSecret?: string
 ): Promise<TokenValidationResult> {
-  // Step 1: confirm token is alive + get user ID
+  const failed = (error: string): TokenValidationResult => ({
+    valid: false,
+    metaUserId: null,
+    instagramUserId: null,
+    instagramUsername: null,
+    igBusinessAccountId: null,
+    scopes: [],
+    expiresAt: null,
+    error,
+  });
+
+  // Step 1: confirm token is alive and get Facebook user ID
   const meUrl = `${BASE_URL}/me?fields=id,name&access_token=${encodeURIComponent(token)}`;
   const meRes = await fetch(meUrl);
   if (!meRes.ok) {
     const body = await meRes.json().catch(() => ({}));
     const msg = (body as { error?: { message?: string } })?.error?.message || "Token is invalid";
-    return { valid: false, instagramUserId: null, instagramUsername: null, igBusinessAccountId: null, scopes: [], expiresAt: null, error: msg };
+    return failed(msg);
   }
   const meData = (await meRes.json()) as { id: string; name?: string };
+  const metaUserId = meData.id;
+  console.log(`[validateAccessToken] Facebook user id: ${metaUserId}`);
 
   // Step 2: get granted permissions
   const permUrl = `${BASE_URL}/me/permissions?access_token=${encodeURIComponent(token)}`;
@@ -317,10 +371,8 @@ export async function validateAccessToken(
     }
   }
 
-  // Step 3: get expiry via debug_token (optional — needs app credentials)
+  // Step 3: get expiry via debug_token (optional)
   let expiresAt: Date | null = null;
-  let instagramUsername: string | null = null;
-
   const resolvedAppId = appId || process.env.META_APP_ID || "";
   const resolvedAppSecret = appSecret || process.env.META_APP_SECRET || "";
 
@@ -340,30 +392,76 @@ export async function validateAccessToken(
     }
   }
 
-  // Step 4: get linked Instagram account (for display + Business Discovery)
+  // Step 4: discover linked Instagram Business/Creator account
+  // Try /me/accounts first, then /me/businesses (for New Pages Experience pages)
   let igBusinessAccountId: string | null = null;
-  const igUrl = `${BASE_URL}/me/accounts?fields=instagram_business_account{id,username},connected_instagram_account{id,username}&access_token=${encodeURIComponent(token)}`;
+  let instagramUsername: string | null = null;
+
+  const igPageFields = "id,name,instagram_business_account{id,username},connected_instagram_account{id,username}";
+
+  // 4a: /me/accounts (Classic pages)
+  const igUrl = `${BASE_URL}/me/accounts?fields=${igPageFields}&access_token=${encodeURIComponent(token)}`;
   const igRes = await fetch(igUrl);
   if (igRes.ok) {
     const igData = (await igRes.json()) as {
       data?: Array<{
+        id: string; name: string;
         instagram_business_account?: { id: string; username: string };
         connected_instagram_account?: { id: string; username: string };
       }>;
     };
-    for (const page of igData.data || []) {
+    const pages = igData.data ?? [];
+    console.log(`[validateAccessToken] /me/accounts returned ${pages.length} pages`);
+    for (const page of pages) {
       const ig = page.instagram_business_account ?? page.connected_instagram_account;
-      if (ig) {
-        igBusinessAccountId = ig.id;
-        instagramUsername = ig.username;
-        break;
+      if (ig) { igBusinessAccountId = ig.id; instagramUsername = ig.username; break; }
+    }
+  }
+
+  // 4b: /me/businesses → pages (New Pages Experience pages)
+  if (!igBusinessAccountId) {
+    const bizUrl = `${BASE_URL}/me/businesses?fields=id,name&access_token=${encodeURIComponent(token)}`;
+    const bizRes = await fetch(bizUrl);
+    if (bizRes.ok) {
+      const bizData = (await bizRes.json()) as { data?: Array<{ id: string; name: string }> };
+      const businesses = bizData.data ?? [];
+      console.log(`[validateAccessToken] /me/businesses returned ${businesses.length} businesses`);
+      for (const biz of businesses) {
+        const pagesUrl = `${BASE_URL}/${biz.id}/pages?fields=${igPageFields}&access_token=${encodeURIComponent(token)}`;
+        const pagesRes = await fetch(pagesUrl);
+        if (pagesRes.ok) {
+          const pagesData = (await pagesRes.json()) as {
+            data?: Array<{
+              id: string; name: string;
+              instagram_business_account?: { id: string; username: string };
+              connected_instagram_account?: { id: string; username: string };
+            }>;
+          };
+          for (const page of pagesData.data ?? []) {
+            const ig = page.instagram_business_account ?? page.connected_instagram_account;
+            if (ig) {
+              igBusinessAccountId = ig.id; instagramUsername = ig.username;
+              console.log(`[validateAccessToken] Found IG account via Business Manager: ${ig.id} (@${ig.username})`);
+              break;
+            }
+          }
+        }
+        if (igBusinessAccountId) break;
       }
     }
   }
 
+  if (!igBusinessAccountId) {
+    console.log("[validateAccessToken] No IG account found via /me/accounts or /me/businesses.");
+  } else {
+    console.log(`[validateAccessToken] Using IG account: ${igBusinessAccountId} (@${instagramUsername})`);
+  }
+
   return {
     valid: true,
-    instagramUserId: meData.id,
+    metaUserId,
+    // instagramUserId stores the IG Business Account ID, not the Facebook user ID
+    instagramUserId: igBusinessAccountId,
     instagramUsername,
     igBusinessAccountId,
     scopes,
@@ -374,25 +472,66 @@ export async function validateAccessToken(
 
 // ─── Account + media API calls ───────────────────────────────────────────────
 
+/**
+ * Discovers Instagram Business/Creator accounts linked to the token's Facebook Pages.
+ * Supports both instagram_business_account and connected_instagram_account.
+ * Fetches full profiles via getAccountProfile for each discovered account ID.
+ */
 export async function getConnectedInstagramAccounts(
   workspaceId: string,
   accessToken: string
 ): Promise<InstagramAccountProfile[]> {
-  const url = `${BASE_URL}/me/accounts?fields=instagram_business_account{id,username,name,biography,website,profile_picture_url,followers_count,follows_count,media_count}&access_token=${accessToken}`;
-
   interface FacebookPageResponse {
     id: string;
-    instagram_business_account?: InstagramAccountProfile;
+    name: string;
+    instagram_business_account?: { id: string; username: string };
+    connected_instagram_account?: { id: string; username: string };
   }
-  const result = await safeApiCall<{ data: FacebookPageResponse[] }>(workspaceId, url);
-  if (!result.data) return [];
 
+  const pageFields = "id,name,instagram_business_account{id,username},connected_instagram_account{id,username}";
   const accounts: InstagramAccountProfile[] = [];
-  for (const page of result.data.data || []) {
-    if (page.instagram_business_account) {
-      accounts.push(page.instagram_business_account);
+  const seenIds = new Set<string>();
+
+  const processPages = async (pages: FacebookPageResponse[]) => {
+    for (const page of pages) {
+      const ig = page.instagram_business_account ?? page.connected_instagram_account;
+      if (!ig || seenIds.has(ig.id)) continue;
+      seenIds.add(ig.id);
+      console.log(`[getConnectedInstagramAccounts] Found IG account: ${ig.id} (@${ig.username}) on page "${page.name}"`);
+      const profile = await getAccountProfile(workspaceId, ig.id, accessToken);
+      accounts.push(profile ?? { id: ig.id, username: ig.username });
+    }
+  };
+
+  // Strategy 1: /me/accounts (Classic pages)
+  const classicUrl = `${BASE_URL}/me/accounts?fields=${pageFields}&access_token=${accessToken}`;
+  const classicResult = await safeApiCall<{ data: FacebookPageResponse[] }>(workspaceId, classicUrl);
+  const classicPages = classicResult.data?.data ?? [];
+  console.log(`[getConnectedInstagramAccounts] /me/accounts returned ${classicPages.length} pages`);
+  await processPages(classicPages);
+
+  // Strategy 2: /me/businesses → pages (New Pages Experience)
+  if (accounts.length === 0) {
+    const bizResult = await safeApiCall<{ data: Array<{ id: string; name: string }> }>(
+      workspaceId,
+      `${BASE_URL}/me/businesses?fields=id,name&access_token=${accessToken}`
+    );
+    const businesses = bizResult.data?.data ?? [];
+    console.log(`[getConnectedInstagramAccounts] /me/businesses returned ${businesses.length} businesses`);
+    for (const biz of businesses) {
+      const pagesResult = await safeApiCall<{ data: FacebookPageResponse[] }>(
+        workspaceId,
+        `${BASE_URL}/${biz.id}/pages?fields=${pageFields}&access_token=${accessToken}`
+      );
+      await processPages(pagesResult.data?.data ?? []);
+      if (accounts.length > 0) break;
     }
   }
+
+  if (accounts.length === 0) {
+    console.log("[getConnectedInstagramAccounts] No Instagram Business or Creator account found. Make sure the Instagram account is Professional, linked to a Facebook Page, and the Facebook user has Page access.");
+  }
+
   return accounts;
 }
 
@@ -422,32 +561,64 @@ export async function getRecentMedia(
   return result.data.data || [];
 }
 
+/**
+ * Fetches insights for a single media item.
+ * Uses media_product_type (preferred) and media_type to select metrics.
+ * Falls back to reach-only if the full metric set is rejected, then {} on total failure.
+ */
 export async function getMediaInsights(
   workspaceId: string,
   mediaId: string,
   mediaType: string,
+  mediaProductType: string | null | undefined,
   accessToken: string
 ): Promise<InstagramMediaInsights> {
-  const metrics =
-    mediaType === "VIDEO" || mediaType === "REELS"
-      ? "reach,impressions,saved,shares,plays,video_views"
-      : "reach,impressions,saved,shares";
+  const isReels =
+    mediaProductType === "REELS" ||
+    mediaType === "REELS";
+  const isVideo =
+    mediaProductType === "FEED" && mediaType === "VIDEO" ||
+    mediaType === "VIDEO";
 
-  const url = `${BASE_URL}/${mediaId}/insights?metric=${metrics}&access_token=${accessToken}`;
-  const result = await safeApiCall<{
-    data: Array<{ name: string; values: Array<{ value: number }> }>;
-  }>(workspaceId, url);
+  // Reels and videos get plays-based metrics; photos get impression-based metrics
+  const primaryMetrics =
+    isReels || isVideo
+      ? "reach,plays,saved,shares"
+      : "reach,impressions,saved";
 
-  if (!result.data) return {};
-
-  const insights: InstagramMediaInsights = {};
-  for (const metric of result.data.data || []) {
-    const value = metric.values?.[0]?.value;
-    if (value != null) {
-      (insights as Record<string, number>)[metric.name] = value;
+  const parseInsights = (data: Array<{ name: string; values?: Array<{ value: number }>; value?: number }>): InstagramMediaInsights => {
+    const insights: InstagramMediaInsights = {};
+    for (const metric of data) {
+      // Insights v2 returns a flat `value`; v1 returns `values[0].value`
+      const value = metric.value ?? metric.values?.[0]?.value;
+      if (value != null) {
+        (insights as Record<string, number>)[metric.name] = value;
+      }
     }
+    return insights;
+  };
+
+  const primaryUrl = `${BASE_URL}/${mediaId}/insights?metric=${primaryMetrics}&access_token=${accessToken}`;
+  const primaryResult = await safeApiCall<{
+    data: Array<{ name: string; values?: Array<{ value: number }>; value?: number }>;
+  }>(workspaceId, primaryUrl);
+
+  if (primaryResult.data) {
+    return parseInsights(primaryResult.data.data ?? []);
   }
-  return insights;
+
+  // Fallback: try reach only
+  const fallbackUrl = `${BASE_URL}/${mediaId}/insights?metric=reach&access_token=${accessToken}`;
+  const fallbackResult = await safeApiCall<{
+    data: Array<{ name: string; values?: Array<{ value: number }>; value?: number }>;
+  }>(workspaceId, fallbackUrl);
+
+  if (fallbackResult.data) {
+    return parseInsights(fallbackResult.data.data ?? []);
+  }
+
+  // Both failed — return empty rather than crashing the sync
+  return {};
 }
 
 // ─── Business Discovery API (competitor public profiles) ─────────────────────
@@ -464,9 +635,18 @@ export interface CompetitorPublicProfile {
   media?: { data: InstagramMediaItem[] };
 }
 
+export interface CompetitorPublicProfileResult {
+  profile: CompetitorPublicProfile | null;
+  errorStatus: BusinessDiscoveryStatus | null;
+  errorMessage: string | null;
+}
+
 /**
- * Fetches public profile + recent media for a competitor/public IG Business account
- * using the Business Discovery API. Requires your own connected IG Business Account ID.
+ * Fetches public profile + recent media for a competitor IG Business account
+ * via the Business Discovery API. Requires your own IG Business Account ID as lens.
+ *
+ * Returns a structured result so callers can distinguish Development mode gating
+ * (requires_live_mode_or_tester) from genuine errors or missing permissions.
  */
 export async function getCompetitorPublicProfile(
   workspaceId: string,
@@ -474,58 +654,106 @@ export async function getCompetitorPublicProfile(
   competitorUsername: string,
   accessToken: string,
   mediaLimit = 30
-): Promise<CompetitorPublicProfile | null> {
+): Promise<CompetitorPublicProfileResult> {
   const mediaFields = `media.limit(${Math.min(mediaLimit, 50)}){id,media_type,caption,permalink,thumbnail_url,timestamp,like_count,comments_count}`;
   const profileFields = `id,username,name,biography,website,profile_picture_url,followers_count,media_count,${mediaFields}`;
   const fields = `business_discovery.fields(${profileFields})`;
-  const url = `${BASE_URL}/${ownIgUserId}?fields=${encodeURIComponent(fields)}&username=${encodeURIComponent(competitorUsername)}&access_token=${accessToken}`;
+  // Encode only { and } — commas/parens must stay raw for Meta's Graph API parser
+  const encodedFields = fields.replace(/\{/g, "%7B").replace(/\}/g, "%7D");
+  const url = `${BASE_URL}/${ownIgUserId}?fields=${encodedFields}&username=${encodeURIComponent(competitorUsername)}&access_token=${accessToken}`;
+  console.log("[BusinessDiscovery] URL (token redacted):", url.replace(accessToken, "REDACTED"));
 
   const result = await safeApiCall<{ business_discovery: CompetitorPublicProfile }>(workspaceId, url);
-  if (!result.data?.business_discovery) return null;
-  return result.data.business_discovery;
+
+  if (result.error || !result.data?.business_discovery) {
+    const errorStatus = classifyBusinessDiscoveryError(result.error);
+    return { profile: null, errorStatus, errorMessage: result.error };
+  }
+
+  return { profile: result.data.business_discovery, errorStatus: null, errorMessage: null };
 }
 
 /**
- * Gets the caller's own Instagram Business Account ID.
- * Tries multiple lookup strategies since token type affects which endpoints work.
+ * Resolves the caller's own Instagram Business Account ID for use with Business Discovery.
+ * Lookup order:
+ *   A. workspaceCredential.igBusinessAccountId (manually set or previously cached)
+ *   B. active InstagramConnection.instagramUserId
+ *   C. /me/accounts (live API call — caches result in DB)
+ *   D. fails with null and logs a clear error
  */
 export async function getOwnInstagramBusinessAccountId(
   workspaceId: string,
   accessToken: string
 ): Promise<string | null> {
-  // Strategy 0: use the manually-set or auto-discovered ID stored in the credential
+  // Strategy A: DB-stored value (manually set or previously discovered)
   const cred = await db.workspaceCredential.findUnique({ where: { workspaceId } });
-  if (cred?.igBusinessAccountId) return cred.igBusinessAccountId;
+  if (cred?.igBusinessAccountId) {
+    console.log(`[IGAccountId] Strategy A: using stored igBusinessAccountId ${cred.igBusinessAccountId}`);
+    return cred.igBusinessAccountId;
+  }
 
-  // Strategy 1: pages → instagram_business_account (most common)
-  const pagesUrl = `${BASE_URL}/me/accounts?fields=instagram_business_account{id},connected_instagram_account{id}&access_token=${accessToken}`;
-  const pagesResult = await safeApiCall<{
-    data: Array<{
-      instagram_business_account?: { id: string };
-      connected_instagram_account?: { id: string };
-    }>;
-  }>(workspaceId, pagesUrl);
+  // Strategy B: any active InstagramConnection for this workspace
+  const activeConn = await db.instagramConnection.findFirst({
+    where: { workspaceId, status: "active" },
+    orderBy: { updatedAt: "desc" },
+  });
+  if (activeConn?.instagramUserId) {
+    console.log(`[IGAccountId] Strategy B: using active InstagramConnection ${activeConn.instagramUserId}`);
+    await db.workspaceCredential.updateMany({
+      where: { workspaceId },
+      data: { igBusinessAccountId: activeConn.instagramUserId },
+    });
+    return activeConn.instagramUserId;
+  }
 
-  if (pagesResult.data) {
-    for (const page of pagesResult.data.data || []) {
+  const igPageFields = "id,name,instagram_business_account{id},connected_instagram_account{id}";
+
+  const findIgIdInPages = (pages: Array<{ id: string; name: string; instagram_business_account?: { id: string }; connected_instagram_account?: { id: string } }>): string | null => {
+    for (const page of pages) {
       const id = page.instagram_business_account?.id ?? page.connected_instagram_account?.id;
-      if (id) {
-        // Cache for future calls
-        await db.workspaceCredential.updateMany({ where: { workspaceId }, data: { igBusinessAccountId: id } });
-        return id;
-      }
+      if (id) return id;
+    }
+    return null;
+  };
+
+  // Strategy C: /me/accounts (Classic pages)
+  const pagesResult = await safeApiCall<{ data: Array<{ id: string; name: string; instagram_business_account?: { id: string }; connected_instagram_account?: { id: string } }> }>(
+    workspaceId,
+    `${BASE_URL}/me/accounts?fields=${igPageFields}&access_token=${accessToken}`
+  );
+  if (pagesResult.data) {
+    const pages = pagesResult.data.data ?? [];
+    console.log(`[IGAccountId] Strategy C: /me/accounts returned ${pages.length} pages`);
+    const id = findIgIdInPages(pages);
+    if (id) {
+      console.log(`[IGAccountId] Strategy C: found IG account ${id}`);
+      await db.workspaceCredential.updateMany({ where: { workspaceId }, data: { igBusinessAccountId: id } });
+      return id;
     }
   }
 
-  // Strategy 2: /me directly (works for some token types)
-  const meUrl = `${BASE_URL}/me?fields=instagram_business_account{id}&access_token=${accessToken}`;
-  const meResult = await safeApiCall<{ instagram_business_account?: { id: string } }>(workspaceId, meUrl);
-  if (meResult.data?.instagram_business_account?.id) {
-    const id = meResult.data.instagram_business_account.id;
-    await db.workspaceCredential.updateMany({ where: { workspaceId }, data: { igBusinessAccountId: id } });
-    return id;
+  // Strategy D: /me/businesses → pages (New Pages Experience)
+  const bizResult = await safeApiCall<{ data: Array<{ id: string; name: string }> }>(
+    workspaceId,
+    `${BASE_URL}/me/businesses?fields=id,name&access_token=${accessToken}`
+  );
+  const businesses = bizResult.data?.data ?? [];
+  console.log(`[IGAccountId] Strategy D: /me/businesses returned ${businesses.length} businesses`);
+  for (const biz of businesses) {
+    const bizPagesResult = await safeApiCall<{ data: Array<{ id: string; name: string; instagram_business_account?: { id: string }; connected_instagram_account?: { id: string } }> }>(
+      workspaceId,
+      `${BASE_URL}/${biz.id}/pages?fields=${igPageFields}&access_token=${accessToken}`
+    );
+    const bizPages = bizPagesResult.data?.data ?? [];
+    const id = findIgIdInPages(bizPages);
+    if (id) {
+      console.log(`[IGAccountId] Strategy D: found IG account ${id} via Business Manager "${biz.name}"`);
+      await db.workspaceCredential.updateMany({ where: { workspaceId }, data: { igBusinessAccountId: id } });
+      return id;
+    }
   }
 
+  console.log("[IGAccountId] All strategies exhausted. No Instagram Business or Creator account found.");
   return null;
 }
 

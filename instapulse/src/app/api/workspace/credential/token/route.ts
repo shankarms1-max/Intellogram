@@ -135,12 +135,13 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Step 5: save credential record — prefer IG account from page discovery, fall back to validation result
+    // Step 5: save credential record — only update igBusinessAccountId if we discovered one;
+    // preserve existing value if the new token can't see the IG account via /me/accounts
     const resolvedIgAccountId = igAccounts[0]?.id ?? validation.igBusinessAccountId ?? null;
     await saveByokToken(workspace.id, token, {
       instagramUserId: validation.instagramUserId,
       instagramUsername: validation.instagramUsername,
-      igBusinessAccountId: resolvedIgAccountId,
+      ...(resolvedIgAccountId ? { igBusinessAccountId: resolvedIgAccountId } : {}),
       expiresAt,
       scopes: validation.scopes,
     });

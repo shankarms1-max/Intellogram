@@ -7,7 +7,7 @@ import { getRecentMedia, getMediaInsights } from "./instagramApiClient";
 export async function syncOwnAccount(
   workspaceId: string,
   trackedAccountId: string
-): Promise<{ success: boolean; error?: string; mediaCount?: number }> {
+): Promise<{ success: boolean; status?: string; error?: string; mediaCount?: number }> {
   const account = await db.trackedAccount.findUnique({
     where: { id: trackedAccountId },
   });
@@ -28,15 +28,23 @@ export async function syncOwnAccount(
     },
   });
 
-  const connection = account.instagramUserId
+  let connection = account.instagramUserId
     ? await db.instagramConnection.findFirst({
-        where: {
-          workspaceId,
-          instagramUserId: account.instagramUserId,
-          status: "active",
-        },
+        where: { workspaceId, instagramUserId: account.instagramUserId, status: "active" },
       })
     : null;
+
+  // Fallback: if lookup by instagramUserId failed (e.g. stale Facebook user ID stored),
+  // try any active connection in the workspace.
+  if (!connection) {
+    connection = await db.instagramConnection.findFirst({
+      where: { workspaceId, status: "active" },
+      orderBy: { updatedAt: "desc" },
+    });
+    if (connection) {
+      console.log(`[syncOwnAccount] Using fallback active connection ${connection.instagramUserId} for account ${account.username}`);
+    }
+  }
 
   if (!connection) {
     await db.trackedAccount.update({
@@ -128,7 +136,7 @@ export async function syncOwnAccount(
   for (const item of mediaItems) {
     let insights = {};
     try {
-      insights = await getMediaInsights(workspaceId, item.id, item.media_type, accessToken);
+      insights = await getMediaInsights(workspaceId, item.id, item.media_type, item.media_product_type, accessToken);
     } catch {
       // insights not available for all media types — stored as null
     }
@@ -233,7 +241,7 @@ async function resolveWorkspaceAccessToken(workspaceId: string): Promise<string 
 export async function syncCompetitorAccount(
   workspaceId: string,
   trackedAccountId: string
-): Promise<{ success: boolean; error?: string; mediaCount?: number }> {
+): Promise<{ success: boolean; status?: string; error?: string; mediaCount?: number }> {
   const account = await db.trackedAccount.findUnique({ where: { id: trackedAccountId } });
   if (!account) return { success: false, error: "Account not found" };
   if (account.workspaceId !== workspaceId) return { success: false, error: "Account does not belong to this workspace" };
@@ -267,11 +275,28 @@ export async function syncCompetitorAccount(
     return { success: false, error: "Could not find a connected Instagram Business/Creator account." };
   }
 
-  const profile = await getCompetitorPublicProfile(workspaceId, ownIgUserId, account.username, accessToken, account.fetchLimit);
+  const { profile, errorStatus, errorMessage: discoveryErrorMessage } = await getCompetitorPublicProfile(workspaceId, ownIgUserId, account.username, accessToken, account.fetchLimit);
   if (!profile) {
+    if (errorStatus === "requires_live_mode_or_tester") {
+      const msg = "Business Discovery is restricted while the Meta app is in Development mode. Test with app tester accounts or switch to Live mode after App Review.";
+      await db.syncJob.update({
+        where: { id: job.id },
+        data: {
+          status: "failed",
+          completedAt: new Date(),
+          errorMessage: msg,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          metadata: { trackedAccountId, username: account.username, businessDiscoveryStatus: "requires_live_mode_or_tester" } as any,
+        },
+      });
+      // Do not mark account as unavailable — own-account sync is unaffected
+      return { success: false, status: "requires_live_mode_or_tester", error: msg };
+    }
+
+    const msg = discoveryErrorMessage ?? `Could not fetch public profile for @${account.username}. Account may be private, personal (non-Business/Creator), or username may be wrong.`;
     await db.syncJob.update({
       where: { id: job.id },
-      data: { status: "failed", completedAt: new Date(), errorMessage: `Could not fetch public profile for @${account.username}. Account may be private, personal (non-Business/Creator), or username may be wrong.` },
+      data: { status: "failed", completedAt: new Date(), errorMessage: msg },
     });
     await db.trackedAccount.update({ where: { id: trackedAccountId }, data: { status: "unavailable" } });
     return { success: false, error: `Could not fetch public profile for @${account.username}. The account must be a public Business or Creator account.` };

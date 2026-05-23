@@ -6,6 +6,8 @@ export const metadata: Metadata = {
   title: "InstaPulse Analytics",
   description:
     "Professional Instagram analytics dashboard. Track, compare, and grow with data-driven insights.",
+  // Private testing deployment — remove robots override before public launch
+  robots: { index: false, follow: false },
 };
 
 export default function RootLayout({

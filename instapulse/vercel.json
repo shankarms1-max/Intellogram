@@ -1,0 +1,19 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/sync-instagram",
+      "schedule": "0 6 * * *"
+    }
+  ],
+  "functions": {
+    "src/app/api/cron/sync-instagram/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/sync/workspace/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/accounts/[id]/sync/route.ts": {
+      "maxDuration": 30
+    }
+  }
+}
