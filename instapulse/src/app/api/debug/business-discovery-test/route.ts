@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { getOrCreateDefaultWorkspace } from "@/lib/workspace";
 import { db } from "@/lib/db";
 import { decryptToken } from "@/lib/encryption";
-import { normalizeInstagramUsername, getOwnInstagramBusinessAccountId } from "@/services/instagramApiClient";
+import { normalizeInstagramUsername, getOwnInstagramBusinessAccountId, COMPETITOR_BUSINESS_DISCOVERY_FIELDS } from "@/services/instagramApiClient";
 
 const GRAPH_API_VERSION = process.env.INSTAGRAM_GRAPH_API_VERSION || "v21.0";
 const BASE_URL = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
@@ -87,8 +87,7 @@ export async function GET(request: NextRequest) {
 
   // ─── Build request exactly as getCompetitorPublicProfile() does ───────────────
 
-  const mediaFields = `media.limit(25){id,caption,media_type,media_product_type,permalink,timestamp,like_count,comments_count}`;
-  const profileFields = `id,username,name,biography,website,profile_picture_url,followers_count,media_count,${mediaFields}`;
+  const profileFields = COMPETITOR_BUSINESS_DISCOVERY_FIELDS.join(",");
   const fields = `business_discovery.username(${normalizedUsername}){${profileFields}}`;
   const exactEndpoint = `${BASE_URL}/${igBusinessAccountId}`;
 

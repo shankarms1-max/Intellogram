@@ -74,6 +74,14 @@ A production-ready Instagram Analytics SaaS built with Next.js 16, Prisma 7, and
 
 Unavailable metrics are stored as `null` and displayed as "Not available via Instagram API" — no fake data.
 
+### Competitor Business Discovery — field whitelist
+
+Competitor sync uses the Business Discovery API with a strict field whitelist (`COMPETITOR_BUSINESS_DISCOVERY_FIELDS` in `instagramApiClient.ts`).
+
+**Allowed fields:** `id`, `username`, `name`, `biography`, `website`, `profile_picture_url`, `followers_count`, `media_count`, and per-media: `id`, `caption`, `media_type`, `media_product_type`, `permalink`, `timestamp`, `like_count`, `comments_count`.
+
+**Never add:** `follows_count`, `media_url`, `thumbnail_url`, `reach`, `impressions`, `saved`, `shares`, or any insights fields. Meta rejects the entire request if any unsupported field is included — even if all other fields are valid. Regression tests in `src/__tests__/businessDiscovery.test.ts` enforce this whitelist.
+
 ---
 
 ## Local Setup

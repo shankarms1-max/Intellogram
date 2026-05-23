@@ -631,6 +631,21 @@ export async function getMediaInsights(
 
 // ─── Business Discovery API (competitor public profiles) ─────────────────────
 
+// Do not add follows_count, media_url, thumbnail_url, reach, impressions, saved,
+// shares, or insights fields to competitor Business Discovery. Meta rejects the
+// entire request if any unsupported field is requested — even valid-looking names.
+export const COMPETITOR_BUSINESS_DISCOVERY_FIELDS = [
+  "id",
+  "username",
+  "name",
+  "biography",
+  "website",
+  "profile_picture_url",
+  "followers_count",
+  "media_count",
+  "media.limit(25){id,caption,media_type,media_product_type,permalink,timestamp,like_count,comments_count}",
+] as const;
+
 export interface CompetitorPublicProfile {
   id: string;
   username: string;
@@ -639,7 +654,6 @@ export interface CompetitorPublicProfile {
   website?: string;
   profile_picture_url?: string;
   followers_count?: number;
-  follows_count?: number;
   media_count?: number;
   media?: { data: InstagramMediaItem[] };
 }
@@ -674,11 +688,13 @@ export async function getCompetitorPublicProfile(
     };
   }
 
-  const limit = Math.min(mediaLimit, 50);
-  // Business Discovery only exposes public fields — follows_count, thumbnail_url, media_url
-  // are NOT available for competitor accounts and will cause a Meta API error if requested.
-  const mediaFields = `media.limit(${limit}){id,caption,media_type,media_product_type,permalink,timestamp,like_count,comments_count}`;
-  const profileFields = `id,username,name,biography,website,profile_picture_url,followers_count,media_count,${mediaFields}`;
+  // Build profile fields from the validated constant — never add fields outside this list.
+  // Replace the media limit in the constant's last entry if mediaLimit is provided.
+  const cappedLimit = Math.min(mediaLimit, 50);
+  const profileFieldsList = COMPETITOR_BUSINESS_DISCOVERY_FIELDS.map((f) =>
+    f.startsWith("media.limit(") ? f.replace(/media\.limit\(\d+\)/, `media.limit(${cappedLimit})`) : f
+  );
+  const profileFields = profileFieldsList.join(",");
   // Username goes inside the field selector — NOT as a separate query param
   const fields = `business_discovery.username(${normalizedUsername}){${profileFields}}`;
   const endpoint = `${BASE_URL}/${ownIgUserId}`;

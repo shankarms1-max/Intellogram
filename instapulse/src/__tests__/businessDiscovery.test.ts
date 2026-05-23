@@ -1,4 +1,5 @@
 import { normalizeInstagramUsername } from "@/lib/instagramUtils";
+import { COMPETITOR_BUSINESS_DISCOVERY_FIELDS } from "@/services/instagramApiClient";
 
 describe("normalizeInstagramUsername", () => {
   // Valid usernames
@@ -73,7 +74,7 @@ describe("Business Discovery query builder", () => {
   it("embeds username in field selector using URLSearchParams, not as query param", () => {
     const username = "nike";
     const ownId = "17841430068732098";
-    const profileFields = "id,username,followers_count,media_count";
+    const profileFields = COMPETITOR_BUSINESS_DISCOVERY_FIELDS.join(",");
     const fields = `business_discovery.username(${username}){${profileFields}}`;
 
     const params = new URLSearchParams();
@@ -90,14 +91,6 @@ describe("Business Discovery query builder", () => {
     expect(url).toContain("%7D");
   });
 
-  it("does not include follows_count in competitor fields", () => {
-    const mediaFields = `media.limit(25){id,caption,media_type,media_product_type,permalink,timestamp,like_count,comments_count}`;
-    const profileFields = `id,username,name,biography,website,profile_picture_url,followers_count,media_count,${mediaFields}`;
-    expect(profileFields).not.toContain("follows_count");
-    expect(profileFields).not.toContain("thumbnail_url");
-    expect(profileFields).not.toContain("media_url");
-  });
-
   it("guard: empty/invalid username returns null before hitting API", () => {
     expect(normalizeInstagramUsername("")).toBeNull();
   });
@@ -111,4 +104,30 @@ describe("Business Discovery query builder", () => {
     expect(normalizeInstagramUsername("@nike")).toBe("nike");
     expect(normalizeInstagramUsername("https://www.instagram.com/nike/")).toBe("nike");
   });
+});
+
+describe("COMPETITOR_BUSINESS_DISCOVERY_FIELDS regression guard", () => {
+  const flatFields = COMPETITOR_BUSINESS_DISCOVERY_FIELDS.join(",");
+
+  // Required fields
+  it("includes id", () => expect(flatFields).toContain("id"));
+  it("includes username", () => expect(flatFields).toContain("username"));
+  it("includes followers_count", () => expect(flatFields).toContain("followers_count"));
+  it("includes media_count", () => expect(flatFields).toContain("media_count"));
+  it("includes like_count", () => expect(flatFields).toContain("like_count"));
+  it("includes comments_count", () => expect(flatFields).toContain("comments_count"));
+  it("includes media_type", () => expect(flatFields).toContain("media_type"));
+  it("includes media_product_type", () => expect(flatFields).toContain("media_product_type"));
+  it("includes permalink", () => expect(flatFields).toContain("permalink"));
+  it("includes timestamp", () => expect(flatFields).toContain("timestamp"));
+
+  // Forbidden fields — adding any of these breaks the entire Meta request
+  it("does NOT include follows_count", () => expect(flatFields).not.toContain("follows_count"));
+  it("does NOT include media_url", () => expect(flatFields).not.toContain("media_url"));
+  it("does NOT include thumbnail_url", () => expect(flatFields).not.toContain("thumbnail_url"));
+  it("does NOT include reach", () => expect(flatFields).not.toContain("reach"));
+  it("does NOT include impressions", () => expect(flatFields).not.toContain("impressions"));
+  it("does NOT include saved", () => expect(flatFields).not.toContain("saved"));
+  it("does NOT include shares", () => expect(flatFields).not.toContain("shares"));
+  it("does NOT include insights", () => expect(flatFields).not.toContain("insights"));
 });
