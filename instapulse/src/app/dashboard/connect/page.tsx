@@ -32,6 +32,21 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+type PagesDiagnosticIssue =
+  | "no_token"
+  | "page_permissions_granted_but_no_pages_returned"
+  | "business_manager_permission_required"
+  | "no_issue_detected"
+  | "api_error";
+
+interface PagesDiagnostic {
+  grantedScopes: string[];
+  pagesCount: number;
+  businessManagementGranted: boolean;
+  businessesAccessible: boolean | null;
+  likelyIssue: PagesDiagnosticIssue;
+}
+
 type CredentialMode = "managed" | "byok_app" | "byok_token";
 type CredentialStatus = "active" | "expired" | "invalid" | "missing_permissions" | "rate_limited" | "unconfigured";
 
@@ -96,6 +111,7 @@ export default function ConnectPage() {
   const [loadingCredential, setLoadingCredential] = useState(true);
   const [loadingConnections, setLoadingConnections] = useState(true);
   const [activeTab, setActiveTab] = useState<CredentialMode>("managed");
+  const [diagnostic, setDiagnostic] = useState<PagesDiagnostic | null>(null);
 
   const fetchCredential = useCallback(async () => {
     setLoadingCredential(true);
@@ -128,10 +144,26 @@ export default function ConnectPage() {
     }
   }, []);
 
+  const fetchDiagnostic = useCallback(async () => {
+    try {
+      const res = await fetch("/api/instagram/diagnostics");
+      if (res.ok) setDiagnostic(await res.json());
+    } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => {
     fetchCredential();
     fetchConnections();
   }, [fetchCredential, fetchConnections]);
+
+  // Fetch diagnostics when: OAuth error occurred, or token exists but no active connections
+  useEffect(() => {
+    const hasToken = credential?.hasAccessToken;
+    const noActiveConnections = !loadingConnections && connections.filter(c => c.status === "active").length === 0;
+    if (hasToken && (errorParam || noActiveConnections)) {
+      fetchDiagnostic();
+    }
+  }, [credential, connections, loadingConnections, errorParam, fetchDiagnostic]);
 
   async function handleDisconnect(instagramUserId: string) {
     await fetch(`/api/instagram/connections?instagramUserId=${encodeURIComponent(instagramUserId)}`, {
@@ -175,6 +207,11 @@ export default function ConnectPage() {
             <p className="text-red-700 mt-0.5">{decodeURIComponent(errorParam)}</p>
           </div>
         </div>
+      )}
+
+      {/* Pages diagnostic — shown when token exists but no Pages visible */}
+      {diagnostic && diagnostic.likelyIssue !== "no_token" && diagnostic.likelyIssue !== "no_issue_detected" && (
+        <PagesDiagnosticPanel diagnostic={diagnostic} />
       )}
 
       {/* API reality notice */}
@@ -275,6 +312,59 @@ export default function ConnectPage() {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Pages diagnostic panel ───────────────────────────────────────────────────
+
+function PagesDiagnosticPanel({ diagnostic }: { diagnostic: PagesDiagnostic }) {
+  const isBusinessManagerIssue = diagnostic.likelyIssue === "business_manager_permission_required";
+
+  return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-4 space-y-3">
+      <div className="flex items-start gap-2">
+        <ShieldAlert className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+        <div className="text-sm">
+          <p className="font-medium text-amber-800">
+            {isBusinessManagerIssue
+              ? "Pages managed through Meta Business Portfolio"
+              : "Facebook login succeeded but no Pages were returned"}
+          </p>
+          <p className="text-amber-700 mt-0.5 leading-relaxed">
+            {isBusinessManagerIssue
+              ? "Your Pages may be managed through Meta Business Portfolio. Business Manager fallback requires the optional business_management permission — enable it by setting META_ENABLE_BUSINESS_MANAGER_FALLBACK=true and reconnecting."
+              : "Meta granted the page permissions but returned 0 Facebook Pages for this account. Without an API-visible Page the app cannot discover your linked Instagram Business Account ID."}
+          </p>
+        </div>
+      </div>
+
+      {!isBusinessManagerIssue && (
+        <div className="space-y-1.5 pl-6">
+          <p className="text-xs font-medium text-amber-800">Steps to fix:</p>
+          <div className="space-y-1">
+            {[
+              "Confirm this Facebook account has Full Control or Admin access to the Page (not just Editor or Analyst)",
+              "Confirm the Page is the same Page linked to the Instagram Business or Creator account",
+              "Confirm the Instagram account is set to Business or Creator (not Personal)",
+              "Go to Facebook → Settings → Apps and Websites → remove the old Channel Radar authorization",
+              "Return here and click Connect with Instagram again — during the OAuth dialog, explicitly select and allow the Page",
+              "If Pages are managed through Meta Business Portfolio, ask your admin to enable Business Manager fallback (META_ENABLE_BUSINESS_MANAGER_FALLBACK=true)",
+            ].map((step) => (
+              <div key={step} className="flex items-start gap-2 text-xs text-amber-700">
+                <span className="shrink-0 mt-0.5">•</span>
+                <span>{step}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="pl-6 pt-1 text-xs text-amber-600 space-y-0.5">
+        <p>Granted scopes: <span className="font-mono">{diagnostic.grantedScopes.join(", ") || "none"}</span></p>
+        <p>API-visible Pages: <span className="font-mono">{diagnostic.pagesCount}</span></p>
+        <p>business_management: <span className="font-mono">{diagnostic.businessManagementGranted ? "granted" : "not granted"}</span></p>
+      </div>
     </div>
   );
 }

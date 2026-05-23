@@ -12,12 +12,21 @@ export function buildOAuthUrl(
   appId: string,
   redirectUri: string
 ): string {
-  const scopes = [
+  const scopeList = [
     "instagram_basic",
     "instagram_manage_insights",
     "pages_read_engagement",
     "pages_show_list",
-  ].join(",");
+  ];
+
+  // Optional Business Manager fallback — adds business_management scope so
+  // /me/businesses can resolve Pages managed through Meta Business Portfolio.
+  // Enable by setting META_ENABLE_BUSINESS_MANAGER_FALLBACK=true in env.
+  if (process.env.META_ENABLE_BUSINESS_MANAGER_FALLBACK === "true") {
+    scopeList.push("business_management");
+  }
+
+  const scopes = scopeList.join(",");
 
   const params = new URLSearchParams({
     client_id: appId,

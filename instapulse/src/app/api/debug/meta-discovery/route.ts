@@ -84,8 +84,18 @@ export async function GET() {
 
   // /me/businesses → pages — New Pages Experience
   const bizRes = await fetch(`${BASE_URL}/me/businesses?fields=id,name&access_token=${encodeURIComponent(accessToken)}`);
-  const bizData: { data?: Array<{ id: string; name: string }> } = bizRes.ok ? await bizRes.json() : {};
+  const bizRaw: { data?: Array<{ id: string; name: string }>; error?: { code?: number; message?: string } } =
+    bizRes.ok ? await bizRes.json() : { error: { message: "http_error" } };
+  const bizData = bizRaw;
   const businesses = bizData.data ?? [];
+  const meBusinessesStatus: "success" | "empty" | "missing_permission" | "failed" = (() => {
+    if (bizRaw.error) {
+      const msg = bizRaw.error.message?.toLowerCase() ?? "";
+      if (msg.includes("missing permission") || msg.includes("permission")) return "missing_permission";
+      return "failed";
+    }
+    return businesses.length > 0 ? "success" : "empty";
+  })();
 
   const businessPages: Array<{ businessId: string; businessName: string; pages: ReturnType<typeof mapPages> }> = [];
   for (const biz of businesses) {
@@ -114,31 +124,56 @@ export async function GET() {
     }
   }
 
-  // Determine Business Discovery readiness (cannot detect app mode from API; infer from setup)
+  const businessManagementGranted = grantedScopes.includes("business_management");
+  const hasPageScopes =
+    grantedScopes.includes("pages_show_list") && grantedScopes.includes("pages_read_engagement");
+
+  // Determine Business Discovery readiness
   let businessDiscoveryModeStatus: string;
-  if (!selectedIgBusinessAccountId) {
+  if (hasPageScopes && pages.length === 0 && !businessManagementGranted && meBusinessesStatus === "missing_permission") {
+    businessDiscoveryModeStatus = "business_manager_permission_required";
+  } else if (hasPageScopes && pages.length === 0) {
+    businessDiscoveryModeStatus = "page_permissions_granted_but_no_pages_returned";
+  } else if (!selectedIgBusinessAccountId) {
     businessDiscoveryModeStatus = "missing_ig_business_account";
-  } else if (!grantedScopes.includes("instagram_manage_insights") && !grantedScopes.includes("business_management")) {
+  } else if (!grantedScopes.includes("instagram_manage_insights") && !businessManagementGranted) {
     businessDiscoveryModeStatus = "missing_permissions";
   } else {
-    // Setup looks correct. In Development mode, public competitor Business Discovery fails
-    // with a spurious "(#100) The parameter username is required." error even when
-    // the username IS provided. Switch app to Live mode after App Review to resolve.
     businessDiscoveryModeStatus = "requires_live_mode_for_public_competitors";
   }
+
+  // Human-readable likely issue for quick triage
+  const likelyIssue = (() => {
+    if (businessDiscoveryModeStatus === "page_permissions_granted_but_no_pages_returned") {
+      return "Page permissions granted, but no API-visible Pages returned. The Facebook user may not have full-control task access to the Page, or the Page–Instagram link is managed through Business Portfolio.";
+    }
+    if (businessDiscoveryModeStatus === "business_manager_permission_required") {
+      return "Pages appear to be managed through Meta Business Portfolio. Business Manager fallback requires the optional business_management permission.";
+    }
+    if (businessDiscoveryModeStatus === "missing_ig_business_account") {
+      return "No Instagram Business Account ID found. Connect an Instagram Business or Creator account linked to a Facebook Page.";
+    }
+    if (businessDiscoveryModeStatus === "missing_permissions") {
+      return "Token lacks instagram_manage_insights. Reconnect and approve all requested permissions.";
+    }
+    return "Setup looks correct. Business Discovery for public competitors requires Meta Live mode (after App Review).";
+  })();
 
   return NextResponse.json({
     metaUserId: meData.id ?? null,
     metaUserName: meData.name ?? null,
     grantedScopes,
-    classicPagesCount: pages.length,
+    businessManagementGranted,
+    meAccountsCount: pages.length,
     classicPages: pages,
+    meBusinessesStatus,
     businessesCount: businesses.length,
     businessPages,
     storedIgBusinessAccountId,
     selectedIgBusinessAccountId,
     selectedInstagramUsername,
     businessDiscoveryModeStatus,
+    likelyIssue,
     note: "Access tokens are never returned by this endpoint.",
   });
 }

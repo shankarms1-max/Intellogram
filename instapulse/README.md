@@ -1,8 +1,8 @@
-# InstaPulse Analytics
+# Channel Radar
 
 A production-ready Instagram Analytics SaaS built with Next.js 16, Prisma 7, and the official Meta Instagram Graph API.
 
-> **Important:** InstaPulse uses **only** official Instagram Graph APIs. No scraping, no Puppeteer, no unofficial endpoints.
+> **Important:** Channel Radar uses **only** official Instagram Graph APIs. No scraping, no Puppeteer, no unofficial endpoints.
 
 ---
 
@@ -195,8 +195,8 @@ In Vercel → Project → Settings → Environment Variables, add all variables 
 ```env
 NEXTAUTH_URL="https://your-app.vercel.app"
 META_REDIRECT_URI="https://your-app.vercel.app/api/auth/meta/callback"
-DEMO_MODE="false"
 NODE_ENV="production"
+# Optional: META_ENABLE_BUSINESS_MANAGER_FALLBACK=true
 ```
 
 > `TOKEN_ENCRYPTION_KEY` **must** be set in production. The app will throw at startup if it is missing or shorter than 16 characters.
@@ -335,6 +335,56 @@ In Development mode, Meta restricts the Business Discovery API to Instagram acco
 6. **Stories** — Story insights require special time-windowed API access; not currently implemented
 7. **Personal accounts** — Only Business/Creator accounts can connect to the Graph API
 8. **App Review** — `instagram_manage_insights` requires Meta App Review before use in production
+
+---
+
+## Troubleshooting: `/me/accounts` returns empty even with permissions granted
+
+### What this means
+
+After OAuth completes, the app calls `GET /me/accounts` to find Facebook Pages and their linked Instagram Business Accounts. If this returns an empty `data` array even though `pages_show_list` and `pages_read_engagement` were granted, the token has the correct scopes but Meta is not surfacing any API-visible Pages for that Facebook user.
+
+This is not a bug in the app. It is a Meta API access/configuration issue.
+
+### Why it happens
+
+App role access (admin/developer/tester on a Meta Developer App) is separate from Page access. The Facebook user who performed OAuth must have **full-control or required task access** to the Facebook Page that is linked to the Instagram Business account. Simply being an admin of the Meta Developer App does not grant Page API access.
+
+Business access is also separate. Pages managed through Meta Business Portfolio are not returned by `/me/accounts`. They require the `business_management` permission to be discovered via `/me/businesses → /{business-id}/pages`.
+
+### Diagnostic states
+
+| State | Meaning |
+|---|---|
+| `page_permissions_granted_but_no_pages_returned` | Scopes granted, `/me/accounts` returned 0 Pages. Facebook user lacks full-control task access to the Page, or the Page–Instagram link is broken. |
+| `business_manager_permission_required` | `/me/businesses` returned a permission error. Pages are likely managed through Meta Business Portfolio. Enable `META_ENABLE_BUSINESS_MANAGER_FALLBACK=true` and reconnect. |
+
+The Connect Instagram page surfaces these states automatically when a token exists but no Pages are returned.
+
+### How to fix
+
+**Step 1 — Verify Page task access**
+
+The Facebook user who is connecting must have **Full Control** (or at minimum the required tasks) on the Facebook Page:
+1. In Facebook: go to the Page → Settings → Page Access → People with Facebook Access
+2. Confirm the connecting user has Full Control, not just Partial Access
+
+**Step 2 — Re-authorize cleanly**
+
+Old OAuth grants can cache incomplete page selections:
+1. Go to Facebook → Settings → Apps and Websites → remove the existing Channel Radar authorization
+2. Return to the Connect Instagram page and go through OAuth again
+3. During the OAuth dialog — when Facebook asks which Pages to grant access to — explicitly select the correct Page
+
+**Step 3 — Business Portfolio fallback (if applicable)**
+
+If the Page is managed through Meta Business Portfolio and `/me/businesses` is returning a permission error:
+1. Set `META_ENABLE_BUSINESS_MANAGER_FALLBACK=true` in Vercel environment variables
+2. Redeploy
+3. Go through OAuth again — the `business_management` scope will be requested
+4. This allows the app to discover Pages via `/me/businesses → pages` instead of `/me/accounts`
+
+> Note: `business_management` is an advanced scope. Meta may require App Review before it can be granted to users outside the development team. For own-team use (app admin/developer), it is available in Development mode.
 
 ---
 
