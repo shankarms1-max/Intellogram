@@ -55,6 +55,14 @@ export async function POST(
         ],
       });
     }
+    if (result.status === "invalid_username" || result.status === "invalid_username_or_query_builder_error") {
+      return NextResponse.json({
+        success: false,
+        status: result.status,
+        message: "Invalid or unresolvable Instagram username.",
+        details: result.error,
+      }, { status: 400 });
+    }
     return NextResponse.json({ error: result.error }, { status: 500 });
   }
 

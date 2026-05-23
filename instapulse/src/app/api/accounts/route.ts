@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { getOrCreateDefaultWorkspace } from "@/lib/workspace";
 import { db } from "@/lib/db";
+import { normalizeInstagramUsername } from "@/services/instagramApiClient";
 
 export async function GET(request: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -50,7 +51,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "username is required" }, { status: 400 });
   }
 
-  const normalizedUsername = username.replace(/^@/, "").toLowerCase().trim();
+  const normalizedUsername = normalizeInstagramUsername(username);
+  if (!normalizedUsername) {
+    return NextResponse.json(
+      { error: "Invalid Instagram username. Use letters, numbers, dots, or underscores (max 30 chars)." },
+      { status: 400 }
+    );
+  }
 
   const existing = await db.trackedAccount.findUnique({
     where: {

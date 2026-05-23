@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { decryptToken } from "@/lib/encryption";
-import { getAccountProfile, getCompetitorPublicProfile, getOwnInstagramBusinessAccountId } from "./instagramApiClient";
+import { getAccountProfile, getCompetitorPublicProfile, getOwnInstagramBusinessAccountId, normalizeInstagramUsername } from "./instagramApiClient";
 import { extractHashtags, calcEngagementRate } from "@/lib/utils";
 import { getRecentMedia, getMediaInsights } from "./instagramApiClient";
 
@@ -275,7 +275,8 @@ export async function syncCompetitorAccount(
     return { success: false, error: "Could not find a connected Instagram Business/Creator account." };
   }
 
-  const { profile, errorStatus, errorMessage: discoveryErrorMessage } = await getCompetitorPublicProfile(workspaceId, ownIgUserId, account.username, accessToken, account.fetchLimit);
+  const normalizedUsername = normalizeInstagramUsername(account.username) ?? account.username;
+  const { profile, errorStatus, errorMessage: discoveryErrorMessage } = await getCompetitorPublicProfile(workspaceId, ownIgUserId, normalizedUsername, accessToken, account.fetchLimit);
   if (!profile) {
     if (errorStatus === "requires_live_mode_or_tester") {
       const msg = "Business Discovery is restricted while the Meta app is in Development mode. Test with app tester accounts or switch to Live mode after App Review.";
@@ -289,8 +290,23 @@ export async function syncCompetitorAccount(
           metadata: { trackedAccountId, username: account.username, businessDiscoveryStatus: "requires_live_mode_or_tester" } as any,
         },
       });
-      // Do not mark account as unavailable — own-account sync is unaffected
       return { success: false, status: "requires_live_mode_or_tester", error: msg };
+    }
+
+    if (errorStatus === "invalid_username" || errorStatus === "invalid_username_or_query_builder_error") {
+      const msg = discoveryErrorMessage ?? `Invalid username: @${account.username}. Check the username and try again.`;
+      await db.syncJob.update({
+        where: { id: job.id },
+        data: {
+          status: "failed",
+          completedAt: new Date(),
+          errorMessage: msg,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          metadata: { trackedAccountId, username: account.username, businessDiscoveryStatus: errorStatus } as any,
+        },
+      });
+      // Do not mark account as unavailable — the username may just need correcting
+      return { success: false, status: errorStatus, error: msg };
     }
 
     const msg = discoveryErrorMessage ?? `Could not fetch public profile for @${account.username}. Account may be private, personal (non-Business/Creator), or username may be wrong.`;
@@ -311,6 +327,7 @@ export async function syncCompetitorAccount(
       biography: profile.biography ?? null,
       website: profile.website ?? null,
       followersCount: profile.followers_count ?? null,
+      followsCount: profile.follows_count ?? null,
       mediaCount: profile.media_count ?? null,
       instagramUserId: profile.id,
       status: "active",

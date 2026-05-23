@@ -37,6 +37,7 @@ import { SyncStatusBadge } from "@/components/dashboard/SyncStatusBadge";
 import { EmptyState } from "@/components/dashboard/EmptyState";
 import { CsvUploader } from "@/components/dashboard/CsvUploader";
 import { formatNumber } from "@/lib/utils";
+import { normalizeInstagramUsername } from "@/lib/instagramUtils";
 
 type AccountType = "own" | "competitor" | "influencer" | "brand" | "other";
 type AccountStatus = "active" | "pending" | "failed" | "unavailable" | "disabled";
@@ -137,16 +138,29 @@ export default function AccountsPage() {
     setAddOpen(true);
   }
 
+  function handleUsernameChange(raw: string) {
+    // Auto-extract from Instagram URL on paste
+    const normalized = normalizeInstagramUsername(raw);
+    setNewUsername(normalized !== null ? normalized : raw.replace(/^@+/, ""));
+  }
+
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
-    setAddLoading(true);
     setAddError(null);
+
+    const normalizedUsername = normalizeInstagramUsername(newUsername);
+    if (!normalizedUsername) {
+      setAddError("Invalid username. Use letters, numbers, dots, or underscores (max 30 chars).");
+      return;
+    }
+
+    setAddLoading(true);
     try {
       const res = await fetch("/api/accounts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username: newUsername,
+          username: normalizedUsername,
           accountType: newAccountType,
           displayName: newDisplayName || undefined,
           notes: newNotes || undefined,
@@ -413,12 +427,15 @@ export default function AccountsPage() {
               <Label htmlFor="add-username">Instagram Username</Label>
               <Input
                 id="add-username"
-                placeholder="@username or username"
+                placeholder="username or instagram.com/username"
                 value={newUsername}
-                onChange={(e) => setNewUsername(e.target.value)}
+                onChange={(e) => handleUsernameChange(e.target.value)}
                 required
                 autoComplete="off"
               />
+              <p className="text-xs text-muted-foreground">
+                Enter username without @. Instagram profile URLs are extracted automatically.
+              </p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="add-type">Account Type</Label>

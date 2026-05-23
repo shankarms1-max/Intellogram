@@ -1,5 +1,7 @@
 import { db } from "@/lib/db";
 import { Prisma } from "@prisma/client";
+import { normalizeInstagramUsername as _normalizeInstagramUsername } from "@/lib/instagramUtils";
+export { normalizeInstagramUsername } from "@/lib/instagramUtils";
 
 const GRAPH_API_VERSION = process.env.INSTAGRAM_GRAPH_API_VERSION || "v21.0";
 const BASE_URL = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
@@ -81,19 +83,25 @@ export type BusinessDiscoveryStatus =
   | "missing_permissions"
   | "rate_limited"
   | "competitor_not_discoverable"
+  | "invalid_username"
+  | "invalid_username_or_query_builder_error"
   | "unknown_error";
 
 /**
  * Classifies a Meta Business Discovery error message into a structured status.
- * Meta returns "(#100) The parameter username is required." when Business Discovery
- * is blocked by app Development mode — even when the username IS provided.
+ * "(#100) The parameter username is required" indicates a query construction bug
+ * (username must be in the field selector, not as &username= query param).
  */
 export function classifyBusinessDiscoveryError(errorMessage: string | null): BusinessDiscoveryStatus {
   if (!errorMessage) return "unknown_error";
   const msg = errorMessage.toLowerCase();
 
-  // Development mode / tester gating: Meta surfaces this as a spurious "parameter required" error
-  if (msg.includes("parameter username is required") || msg.includes("unsupported get request")) {
+  // Query builder bug — username in wrong place in the API call
+  if (msg.includes("parameter username is required")) {
+    return "invalid_username_or_query_builder_error";
+  }
+  // Unsupported request — can indicate dev mode or malformed request
+  if (msg.includes("unsupported get request")) {
     return "requires_live_mode_or_tester";
   }
   // Missing permissions / OAuth errors
@@ -631,6 +639,7 @@ export interface CompetitorPublicProfile {
   website?: string;
   profile_picture_url?: string;
   followers_count?: number;
+  follows_count?: number;
   media_count?: number;
   media?: { data: InstagramMediaItem[] };
 }
@@ -655,13 +664,26 @@ export async function getCompetitorPublicProfile(
   accessToken: string,
   mediaLimit = 30
 ): Promise<CompetitorPublicProfileResult> {
-  const mediaFields = `media.limit(${Math.min(mediaLimit, 50)}){id,media_type,caption,permalink,thumbnail_url,timestamp,like_count,comments_count}`;
-  const profileFields = `id,username,name,biography,website,profile_picture_url,followers_count,media_count,${mediaFields}`;
-  const fields = `business_discovery.fields(${profileFields})`;
+  const normalizedUsername = _normalizeInstagramUsername(competitorUsername);
+
+  if (!normalizedUsername) {
+    return {
+      profile: null,
+      errorStatus: "invalid_username",
+      errorMessage: "Enter the Instagram username without @.",
+    };
+  }
+
+  const limit = Math.min(mediaLimit, 50);
+  const mediaFields = `media.limit(${limit}){id,media_type,media_product_type,caption,permalink,thumbnail_url,media_url,timestamp,like_count,comments_count}`;
+  const profileFields = `id,username,name,biography,website,profile_picture_url,followers_count,follows_count,media_count,${mediaFields}`;
+  // Correct Business Discovery syntax: username embedded in field selector, NOT as a query param
+  const fields = `business_discovery.username(${normalizedUsername}){${profileFields}}`;
   // Encode only { and } — commas/parens must stay raw for Meta's Graph API parser
   const encodedFields = fields.replace(/\{/g, "%7B").replace(/\}/g, "%7D");
-  const url = `${BASE_URL}/${ownIgUserId}?fields=${encodedFields}&username=${encodeURIComponent(competitorUsername)}&access_token=${accessToken}`;
-  console.log("[BusinessDiscovery] URL (token redacted):", url.replace(accessToken, "REDACTED"));
+  const url = `${BASE_URL}/${ownIgUserId}?fields=${encodedFields}&access_token=${accessToken}`;
+
+  console.log("[BusinessDiscovery] username=%s ownId=%s", normalizedUsername, ownIgUserId);
 
   const result = await safeApiCall<{ business_discovery: CompetitorPublicProfile }>(workspaceId, url);
 
