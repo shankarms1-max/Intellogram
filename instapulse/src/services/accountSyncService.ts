@@ -327,7 +327,6 @@ export async function syncCompetitorAccount(
       biography: profile.biography ?? null,
       website: profile.website ?? null,
       followersCount: profile.followers_count ?? null,
-      followsCount: profile.follows_count ?? null,
       mediaCount: profile.media_count ?? null,
       instagramUserId: profile.id,
       status: "active",

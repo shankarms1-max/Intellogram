@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { getOrCreateDefaultWorkspace } from "@/lib/workspace";
 import { db } from "@/lib/db";
 import { syncOwnAccount, syncCompetitorAccount } from "@/services/accountSyncService";
-import { isWorkspaceRateLimited } from "@/services/instagramApiClient";
+import { isWorkspaceRateLimited, normalizeInstagramUsername } from "@/services/instagramApiClient";
 
 export async function POST(
   request: NextRequest,
@@ -35,6 +35,10 @@ export async function POST(
     );
   }
 
+  const isCompetitor = account.accountType !== "own";
+  const rawUsername = account.username;
+  const normalizedUsername = isCompetitor ? (normalizeInstagramUsername(rawUsername) ?? rawUsername) : null;
+
   const result = account.accountType === "own"
     ? await syncOwnAccount(workspace.id, id)
     : await syncCompetitorAccount(workspace.id, id);
@@ -44,6 +48,8 @@ export async function POST(
       return NextResponse.json({
         success: false,
         status: "requires_live_mode_or_tester",
+        rawUsername,
+        normalizedUsername,
         message: "Competitor sync requires Meta Live access.",
         details:
           "Your Instagram connection is working, but Meta restricts Business Discovery in Development mode to app tester/role accounts. To sync public competitors, complete Meta App Review, switch the app to Live mode, and ensure the required permissions are approved.",
@@ -59,11 +65,21 @@ export async function POST(
       return NextResponse.json({
         success: false,
         status: result.status,
+        rawUsername,
+        normalizedUsername,
         message: "Invalid or unresolvable Instagram username.",
         details: result.error,
+        hint: `Use /api/debug/business-discovery-test?username=${encodeURIComponent(rawUsername)} to diagnose.`,
       }, { status: 400 });
     }
-    return NextResponse.json({ error: result.error }, { status: 500 });
+    return NextResponse.json({
+      success: false,
+      status: result.status ?? "error",
+      rawUsername,
+      normalizedUsername,
+      message: result.error ?? "Sync failed.",
+      hint: isCompetitor ? `Use /api/debug/business-discovery-test?username=${encodeURIComponent(rawUsername)} to diagnose.` : undefined,
+    }, { status: 500 });
   }
 
   return NextResponse.json({ success: true, mediaCount: result.mediaCount });

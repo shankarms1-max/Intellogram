@@ -675,15 +675,28 @@ export async function getCompetitorPublicProfile(
   }
 
   const limit = Math.min(mediaLimit, 50);
-  const mediaFields = `media.limit(${limit}){id,media_type,media_product_type,caption,permalink,thumbnail_url,media_url,timestamp,like_count,comments_count}`;
-  const profileFields = `id,username,name,biography,website,profile_picture_url,followers_count,follows_count,media_count,${mediaFields}`;
-  // Correct Business Discovery syntax: username embedded in field selector, NOT as a query param
+  // Business Discovery only exposes public fields — follows_count, thumbnail_url, media_url
+  // are NOT available for competitor accounts and will cause a Meta API error if requested.
+  const mediaFields = `media.limit(${limit}){id,caption,media_type,media_product_type,permalink,timestamp,like_count,comments_count}`;
+  const profileFields = `id,username,name,biography,website,profile_picture_url,followers_count,media_count,${mediaFields}`;
+  // Username goes inside the field selector — NOT as a separate query param
   const fields = `business_discovery.username(${normalizedUsername}){${profileFields}}`;
-  // Encode only { and } — commas/parens must stay raw for Meta's Graph API parser
-  const encodedFields = fields.replace(/\{/g, "%7B").replace(/\}/g, "%7D");
-  const url = `${BASE_URL}/${ownIgUserId}?fields=${encodedFields}&access_token=${accessToken}`;
+  const endpoint = `${BASE_URL}/${ownIgUserId}`;
 
-  console.log("[BusinessDiscovery] username=%s ownId=%s", normalizedUsername, ownIgUserId);
+  // Use URLSearchParams so the token and all field characters are properly encoded
+  const params = new URLSearchParams();
+  params.set("fields", fields);
+  params.set("access_token", accessToken);
+  const url = `${endpoint}?${params.toString()}`;
+
+  console.log("[BusinessDiscovery]", JSON.stringify({
+    igBusinessAccountId: ownIgUserId,
+    rawUsername: competitorUsername,
+    normalizedUsername,
+    endpoint,
+    fields,
+    hasAccessToken: true,
+  }));
 
   const result = await safeApiCall<{ business_discovery: CompetitorPublicProfile }>(workspaceId, url);
 

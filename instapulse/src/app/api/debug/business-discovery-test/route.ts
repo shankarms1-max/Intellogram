@@ -11,8 +11,8 @@ const BASE_URL = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
 /**
  * GET /api/debug/business-discovery-test?username=<instagram_username>
- * Tests the Business Discovery API call for a given username using the active workspace token.
- * Never returns access tokens.
+ * Tests the Business Discovery API using the active workspace token.
+ * Returns full diagnostic output — never returns the access token itself.
  */
 export async function GET(request: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -33,49 +33,108 @@ export async function GET(request: NextRequest) {
     }, { status: 400 });
   }
 
-  // Resolve access token
+  // ─── Resolve token — prefer OAuth InstagramConnection, fall back to BYOK ─────
+
   let accessToken: string | null = null;
+  let tokenSource: "instagram_connection" | "byok_token" | "none" = "none";
+  let grantedScopes: string[] = [];
+  let tokenExpiresAt: Date | null = null;
+  let instagramUserIdFromConnection: string | null = null;
 
   const activeConn = await db.instagramConnection.findFirst({
     where: { workspaceId: workspace.id, status: "active" },
     orderBy: { updatedAt: "desc" },
   });
   if (activeConn?.accessTokenEncrypted) {
-    try { accessToken = decryptToken(activeConn.accessTokenEncrypted); } catch { /* ignore */ }
+    try {
+      accessToken = decryptToken(activeConn.accessTokenEncrypted);
+      tokenSource = "instagram_connection";
+      grantedScopes = activeConn.scopes ?? [];
+      tokenExpiresAt = activeConn.tokenExpiresAt ?? null;
+      instagramUserIdFromConnection = activeConn.instagramUserId;
+    } catch { /* fall through */ }
   }
 
   if (!accessToken) {
     const cred = await db.workspaceCredential.findUnique({ where: { workspaceId: workspace.id } });
     if (cred?.accessTokenEncrypted) {
-      try { accessToken = decryptToken(cred.accessTokenEncrypted); } catch { /* ignore */ }
+      try {
+        accessToken = decryptToken(cred.accessTokenEncrypted);
+        tokenSource = "byok_token";
+      } catch { /* ignore */ }
     }
   }
 
   if (!accessToken) {
-    return NextResponse.json({ error: "No access token found. Connect your Instagram account first." }, { status: 400 });
+    return NextResponse.json({
+      success: false,
+      tokenSource: "none",
+      error: "No access token found. Connect your Instagram account first.",
+    }, { status: 400 });
   }
 
   const igBusinessAccountId = await getOwnInstagramBusinessAccountId(workspace.id, accessToken);
   if (!igBusinessAccountId) {
-    return NextResponse.json({ error: "Could not resolve your Instagram Business Account ID." }, { status: 400 });
+    return NextResponse.json({
+      success: false,
+      tokenSource,
+      grantedScopes,
+      expiresAt: tokenExpiresAt,
+      instagramUserIdFromConnection,
+      error: "Could not resolve your Instagram Business Account ID.",
+    }, { status: 400 });
   }
 
-  const fields = `business_discovery.username(${normalizedUsername}){id,username,name,biography,followers_count,media_count}`;
-  const encodedFields = fields.replace(/\{/g, "%7B").replace(/\}/g, "%7D");
-  const url = `${BASE_URL}/${igBusinessAccountId}?fields=${encodedFields}&access_token=${accessToken}`;
+  // ─── Build request exactly as getCompetitorPublicProfile() does ───────────────
 
+  const mediaFields = `media.limit(25){id,caption,media_type,media_product_type,permalink,timestamp,like_count,comments_count}`;
+  const profileFields = `id,username,name,biography,website,profile_picture_url,followers_count,media_count,${mediaFields}`;
+  const fields = `business_discovery.username(${normalizedUsername}){${profileFields}}`;
+  const exactEndpoint = `${BASE_URL}/${igBusinessAccountId}`;
+
+  const params = new URLSearchParams();
+  params.set("fields", fields);
+  params.set("access_token", accessToken);
+  const url = `${exactEndpoint}?${params.toString()}`;
+
+  // ─── Execute ──────────────────────────────────────────────────────────────────
+
+  let success = false;
+  let businessDiscoveryFound = false;
+  let mediaCountReturned: number | null = null;
+  let firstMediaPermalink: string | null = null;
   let businessDiscoveryResult: unknown = null;
   let safeMetaError: unknown = null;
-  let success = false;
 
   try {
     const res = await fetch(url);
-    const body = await res.json();
+    const body = await res.json() as {
+      business_discovery?: {
+        id?: string;
+        username?: string;
+        followers_count?: number;
+        media_count?: number;
+        media?: { data: Array<{ permalink?: string }> };
+      };
+      error?: unknown;
+    };
+
     if (res.ok && body.business_discovery) {
       success = true;
-      businessDiscoveryResult = body.business_discovery;
+      businessDiscoveryFound = true;
+      const bd = body.business_discovery;
+      mediaCountReturned = bd.media?.data?.length ?? null;
+      firstMediaPermalink = bd.media?.data?.[0]?.permalink ?? null;
+      // Return profile without media array (it can be large)
+      businessDiscoveryResult = {
+        id: bd.id,
+        username: bd.username,
+        followers_count: bd.followers_count,
+        media_count: bd.media_count,
+        mediaInResponse: mediaCountReturned,
+      };
     } else {
-      safeMetaError = (body as { error?: unknown }).error ?? body;
+      safeMetaError = body.error ?? body;
     }
   } catch (err) {
     safeMetaError = { message: err instanceof Error ? err.message : "Network error" };
@@ -83,9 +142,22 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     success,
+    // Token info
+    tokenExists: true,
+    tokenSource,
+    grantedScopes,
+    expiresAt: tokenExpiresAt,
+    instagramUserIdFromConnection,
     igBusinessAccountIdUsed: igBusinessAccountId,
+    // Request
     rawUsername,
     normalizedUsername,
+    exactEndpoint,
+    exactFields: fields,
+    // Result
+    businessDiscoveryFound,
+    mediaCountReturned,
+    firstMediaPermalink,
     businessDiscoveryResult,
     safeMetaError,
     note: "Access tokens are never returned by this endpoint.",

@@ -70,26 +70,45 @@ describe("normalizeInstagramUsername", () => {
 });
 
 describe("Business Discovery query builder", () => {
-  it("embeds username in field selector, not as query param", () => {
-    const username = "navya_shankar1211";
+  it("embeds username in field selector using URLSearchParams, not as query param", () => {
+    const username = "nike";
     const ownId = "17841430068732098";
-    const profileFields = "id,username,followers_count";
+    const profileFields = "id,username,followers_count,media_count";
     const fields = `business_discovery.username(${username}){${profileFields}}`;
-    const encoded = fields.replace(/\{/g, "%7B").replace(/\}/g, "%7D");
-    const url = `https://graph.facebook.com/v21.0/${ownId}?fields=${encoded}&access_token=TOKEN`;
 
-    expect(url).toContain(`business_discovery.username(${username})`);
+    const params = new URLSearchParams();
+    params.set("fields", fields);
+    params.set("access_token", "TOKEN");
+    const url = `https://graph.facebook.com/v21.0/${ownId}?${params.toString()}`;
+
+    // Username must be in field selector
+    expect(url).toContain(`business_discovery.username%28${username}%29`);
+    // Must NOT be a separate query param
     expect(url).not.toContain("&username=");
+    // Braces encoded
     expect(url).toContain("%7B");
     expect(url).toContain("%7D");
   });
 
-  it("guard: empty/invalid username returns invalid_username before hitting API", () => {
-    const result = normalizeInstagramUsername("");
-    expect(result).toBeNull();
+  it("does not include follows_count in competitor fields", () => {
+    const mediaFields = `media.limit(25){id,caption,media_type,media_product_type,permalink,timestamp,like_count,comments_count}`;
+    const profileFields = `id,username,name,biography,website,profile_picture_url,followers_count,media_count,${mediaFields}`;
+    expect(profileFields).not.toContain("follows_count");
+    expect(profileFields).not.toContain("thumbnail_url");
+    expect(profileFields).not.toContain("media_url");
+  });
+
+  it("guard: empty/invalid username returns null before hitting API", () => {
+    expect(normalizeInstagramUsername("")).toBeNull();
   });
 
   it("guard: @-only returns null", () => {
     expect(normalizeInstagramUsername("@")).toBeNull();
+  });
+
+  it("nike, @nike, and instagram.com/nike all normalize to nike", () => {
+    expect(normalizeInstagramUsername("nike")).toBe("nike");
+    expect(normalizeInstagramUsername("@nike")).toBe("nike");
+    expect(normalizeInstagramUsername("https://www.instagram.com/nike/")).toBe("nike");
   });
 });
