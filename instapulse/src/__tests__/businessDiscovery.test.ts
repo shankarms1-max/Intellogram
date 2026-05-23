@@ -204,3 +204,80 @@ describe("view_count mapping behavior", () => {
     expect(mapViewCount(item)).toBeNull();
   });
 });
+
+describe("upsert UPDATE path — view_count guard", () => {
+  // These tests document the correct behavior of the UPDATE spread guard:
+  //   ...(item.view_count != null ? { viewsCount: item.view_count } : {})
+  // This means: only add viewsCount to the UPDATE when Meta returns a non-null value.
+  // An absent view_count (IMAGE/CAROUSEL) does NOT overwrite an existing DB value with null.
+
+  function buildUpdatePatch(item: { view_count?: number | null }): Record<string, unknown> {
+    return {
+      likeCount: null,
+      commentsCount: null,
+      ...(item.view_count != null ? { viewsCount: item.view_count } : {}),
+      engagementRate: null,
+    };
+  }
+
+  it("REELS with view_count = 13765110 → patch includes viewsCount: 13765110", () => {
+    const patch = buildUpdatePatch({ view_count: 13765110 });
+    expect(patch).toHaveProperty("viewsCount", 13765110);
+  });
+
+  it("REELS with view_count = 0 → patch includes viewsCount: 0 (not null)", () => {
+    const patch = buildUpdatePatch({ view_count: 0 });
+    expect(patch).toHaveProperty("viewsCount", 0);
+  });
+
+  it("IMAGE with no view_count → patch does NOT include viewsCount key (preserves DB value)", () => {
+    const patch = buildUpdatePatch({});
+    expect(patch).not.toHaveProperty("viewsCount");
+  });
+
+  it("item.view_count = null → patch does NOT include viewsCount key", () => {
+    const patch = buildUpdatePatch({ view_count: null });
+    expect(patch).not.toHaveProperty("viewsCount");
+  });
+
+  it("item.view_count = undefined → patch does NOT include viewsCount key", () => {
+    const patch = buildUpdatePatch({ view_count: undefined });
+    expect(patch).not.toHaveProperty("viewsCount");
+  });
+
+  it("existing row with viewsCount = null, new sync returns view_count → patch includes new value", () => {
+    // Simulates a row synced before view_count support (viewsCount = null in DB),
+    // now re-synced after view_count is in the query and Meta returns it.
+    const newSyncItem = { view_count: 4270137 };
+    const patch = buildUpdatePatch(newSyncItem);
+    expect(patch.viewsCount).toBe(4270137);
+  });
+});
+
+describe("UI display logic — viewsCount rendering", () => {
+  // These tests verify the display predicate used in Media Explorer:
+  //   item.viewsCount != null ? formatNumber(item.viewsCount) : "—"
+
+  function displayViews(viewsCount: number | null | undefined): string {
+    if (viewsCount != null) return viewsCount.toLocaleString();
+    return "—";
+  }
+
+  it("viewsCount = 13765110 renders formatted number", () => {
+    expect(displayViews(13765110)).not.toBe("—");
+    expect(displayViews(13765110)).toContain("13");
+  });
+
+  it("viewsCount = null renders dash", () => {
+    expect(displayViews(null)).toBe("—");
+  });
+
+  it("viewsCount = 0 renders 0 (not dash)", () => {
+    expect(displayViews(0)).not.toBe("—");
+    expect(displayViews(0)).toBe("0");
+  });
+
+  it("viewsCount = undefined renders dash", () => {
+    expect(displayViews(undefined)).toBe("—");
+  });
+});

@@ -261,13 +261,29 @@ async function upsertCompetitorMediaItem(
     item.comments_count ?? null,
     followersCount
   );
+  // Debug: log whenever Meta returns view_count so we can trace the value through the pipeline
+  if (item.view_count != null) {
+    console.log("[CompetitorMedia][view_count]", JSON.stringify({
+      id: item.id,
+      media_type: item.media_type,
+      media_product_type: item.media_product_type ?? null,
+      view_count: item.view_count,
+      mappedViewsCount: item.view_count,
+    }));
+  }
+
   await db.mediaItem.upsert({
     where: { trackedAccountId_instagramMediaId: { trackedAccountId, instagramMediaId: item.id } },
     update: {
+      // Always update these engagement fields
+      mediaProductType: item.media_product_type ?? null,
       likeCount: item.like_count ?? null,
       commentsCount: item.comments_count ?? null,
-      // view_count is only returned for some VIDEO / REELS; null for IMAGE / CAROUSEL_ALBUM
-      viewsCount: item.view_count ?? null,
+      // Only set viewsCount when Meta explicitly returns view_count.
+      // Omitting it (not null) preserves any previously-stored value for rows that were
+      // synced before view_count was added to the query. IMAGE/CAROUSEL rows that
+      // naturally have no view_count keep their existing null unchanged.
+      ...(item.view_count != null ? { viewsCount: item.view_count } : {}),
       engagementRate: engRate,
       fetchedAt: new Date(),
     },
