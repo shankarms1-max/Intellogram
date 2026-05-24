@@ -13,6 +13,8 @@ import {
   Zap,
   Activity,
   Swords,
+  Globe,
+  Globe2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -27,16 +29,18 @@ const navGroups = [
     ],
   },
   {
-    label: "Monitoring",
+    label: "Meta Intelligence",
     items: [
-      { href: "/dashboard/accounts", label: "All Accounts", icon: Users },
-      { href: "/dashboard/competitor", label: "Competitor Intel", icon: Swords },
+      { href: "/dashboard/meta-overview", label: "Overview", icon: Globe2 },
+      { href: "/dashboard/accounts", label: "Instagram", icon: Aperture },
+      { href: "/dashboard/facebook-pages", label: "Facebook Pages", icon: Globe },
+      { href: "/dashboard/competitor", label: "Competitors", icon: Swords },
     ],
   },
   {
     label: "System",
     items: [
-      { href: "/dashboard/connect", label: "Connect Instagram", icon: Aperture },
+      { href: "/dashboard/connect", label: "Connect Meta", icon: Aperture },
       { href: "/dashboard/logs", label: "API Logs", icon: Activity },
       { href: "/dashboard/settings", label: "Settings", icon: Settings },
     ],
@@ -92,9 +96,9 @@ export function Sidebar() {
 
       <div className="px-6 py-4 border-t border-border">
         <p className="text-xs text-muted-foreground">
-          Uses official Instagram APIs.
+          Uses official Meta APIs only.
           <br />
-          Available metrics depend on Meta API permissions.
+          Available metrics depend on Meta permissions.
         </p>
       </div>
     </aside>

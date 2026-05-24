@@ -562,3 +562,76 @@ This setup is available as **assisted onboarding** for Agency and Enterprise cus
 - After approval and Live mode, any Instagram Business/Creator account can connect
 
 For the full checklist, see [PRODUCTION_CHECKLIST.md](PRODUCTION_CHECKLIST.md).
+
+
+---
+
+## Meta Intelligence
+
+Meta Intelligence combines Instagram Business/Creator accounts and Facebook Pages in one connected workspace.
+
+- Instagram competitor tracking uses Meta Business Discovery API.
+- Facebook Page intelligence supports Pages the user manages through Meta permissions.
+- Facebook Page posts can be imported and analyzed (reactions, comments, shares).
+- Cross-platform overview combines Instagram media and Facebook Page posts in one view.
+- **Facebook competitor intelligence is not included in v1.**
+- **Ads intelligence is not included in v1.**
+- **Publishing and comment management are not included in v1.**
+
+### Facebook Page Data
+
+Each connected Facebook Page syncs the following data:
+
+| Field | Notes |
+|---|---|
+| Page profile metadata | Name, category, picture, link, fan/follower counts |
+| Linked Instagram account | Instagram Business/Creator account ID and username |
+| Recent Page posts | Message/story, created time, permalink |
+| Facebook Reactions summary | `reactions.summary.total_count` |
+| Comments summary | `comments.summary.total_count` |
+| Shares count | `shares.count` (where available) |
+| Attachment type and URL | Where present on the post |
+| Engagement count | Reactions + Comments + Shares |
+
+Post fields may be absent depending on post type and Meta permissions. Some posts have only `story` and no `message` (e.g. cover photo updates, shared links).
+
+### Meta Permissions
+
+| Permission | Purpose |
+|---|---|
+| `pages_show_list` | Discover Facebook Pages you manage |
+| `pages_read_engagement` | Read Page metadata and engagement metrics |
+| `instagram_basic` | Discover linked Instagram professional accounts |
+| `instagram_manage_insights` | Read insights for your own Instagram accounts |
+| `business_management` | Optional fallback for Business Manager asset discovery |
+
+No additional permissions are requested or required for Facebook Page post sync.
+
+### Sync Modes (Facebook Pages)
+
+| Mode | Posts fetched | Max pages | Usage |
+|---|---|---|---|
+| `daily_refresh` | 25 | 1 | Scheduled cron sync |
+| `initial_import` | 100 | 4 | First import or manual refresh |
+| `manual_deep_import` | 500 | 20 | Manual/admin trigger via `/deep-import` |
+
+### Limitations
+
+- Facebook Page data is limited to Pages the user manages. Public competitor Pages cannot be accessed.
+- Some post fields may be missing depending on post type and permissions granted.
+- Facebook competitor tracking is not part of Meta Intelligence v1.
+- Ads data is not part of Meta Intelligence v1.
+- Publishing, comment moderation, and inbox management are not included.
+- Views are not returned by Meta for Facebook Page posts (only Instagram Reels/VIDEO via `view_count`).
+
+### API Endpoints (Facebook)
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/meta/discover-pages` | Discover and store Facebook Pages via Meta OAuth |
+| `POST` | `/api/facebook-pages/[id]/sync` | Sync page posts (`daily_refresh` or `initial_import`) |
+| `POST` | `/api/facebook-pages/[id]/deep-import` | Manual deep import (up to 500 posts) |
+| `GET` | `/api/facebook-pages/[id]/posts` | Paginated posts for a page (DB query) |
+| `GET` | `/api/debug/facebook-page-check` | Debug: page and post summary for a specific page |
+| `GET` | `/api/debug/meta-assets-check` | Debug: cross-platform asset overview (IG + FB) |
+

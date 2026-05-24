@@ -250,25 +250,44 @@ async function resolveWorkspaceAccessToken(workspaceId: string): Promise<string 
   return null;
 }
 
+const KNOWN_NIKE_REEL_IDS = new Set(["18079952732530197", "18043682267771164"]);
+
 async function upsertCompetitorMediaItem(
   workspaceId: string,
   trackedAccountId: string,
   item: InstagramMediaItem,
   followersCount: number | null
-): Promise<void> {
+): Promise<{ viewCountIncluded: boolean }> {
   const engRate = calcEngagementRate(
     item.like_count ?? null,
     item.comments_count ?? null,
     followersCount
   );
+
+  const viewCountIncluded = item.view_count != null;
+
   // Debug: log whenever Meta returns view_count so we can trace the value through the pipeline
-  if (item.view_count != null) {
+  if (viewCountIncluded) {
     console.log("[CompetitorMedia][view_count]", JSON.stringify({
       id: item.id,
       media_type: item.media_type,
       media_product_type: item.media_product_type ?? null,
       view_count: item.view_count,
       mappedViewsCount: item.view_count,
+    }));
+  }
+
+  // Special tracing for known Nike Reel IDs used in pipeline verification
+  if (KNOWN_NIKE_REEL_IDS.has(item.id)) {
+    const existing = await db.mediaItem.findFirst({
+      where: { trackedAccountId, instagramMediaId: item.id },
+      select: { id: true },
+    });
+    console.log("[CompetitorSync][known-nike-reel]", JSON.stringify({
+      mediaId: item.id,
+      view_count: item.view_count ?? null,
+      mappedViewsCount: item.view_count ?? null,
+      action: existing ? "update" : "create",
     }));
   }
 
@@ -305,6 +324,8 @@ async function upsertCompetitorMediaItem(
       // reach/impressions/saves/shares are null — not available via Business Discovery
     },
   });
+
+  return { viewCountIncluded };
 }
 
 export async function syncCompetitorAccount(
@@ -319,6 +340,13 @@ export async function syncCompetitorAccount(
   pagesFetched?: number;
   stoppedReason?: string;
   syncMode?: CompetitorSyncMode;
+  requestedLimit?: number;
+  fetchedMediaCount?: number;
+  upsertedMediaCount?: number;
+  oldestFetchedTimestamp?: string | null;
+  newestFetchedTimestamp?: string | null;
+  viewCountItemsReceived?: number;
+  viewCountItemsUpserted?: number;
 }> {
   const account = await db.trackedAccount.findUnique({ where: { id: trackedAccountId } });
   if (!account) return { success: false, error: "Account not found" };
@@ -474,9 +502,13 @@ export async function syncCompetitorAccount(
   // ─── Upsert collected media ───────────────────────────────────────────────
 
   let synced = 0;
+  let viewCountItemsReceived = 0;
+  let viewCountItemsUpserted = 0;
   const mediaToStore = allMedia.slice(0, mediaLimit);
   for (const item of mediaToStore) {
-    await upsertCompetitorMediaItem(workspaceId, trackedAccountId, item, profile.followers_count ?? null);
+    if (item.view_count != null) viewCountItemsReceived++;
+    const { viewCountIncluded } = await upsertCompetitorMediaItem(workspaceId, trackedAccountId, item, profile.followers_count ?? null);
+    if (viewCountIncluded) viewCountItemsUpserted++;
     synced++;
   }
 
@@ -486,28 +518,47 @@ export async function syncCompetitorAccount(
   const oldestFetchedTimestamp = timestamps.length ? new Date(Math.min(...timestamps)).toISOString() : null;
   const newestFetchedTimestamp = timestamps.length ? new Date(Math.max(...timestamps)).toISOString() : null;
 
+  const syncSummary = {
+    trackedAccountId,
+    username: account.username,
+    syncMode,
+    requestedLimit: mediaLimit,
+    fetchedMediaCount: allMedia.length,
+    upsertedMediaCount: synced,
+    pagesFetched,
+    oldestFetchedTimestamp,
+    newestFetchedTimestamp,
+    stoppedReason,
+    viewCountItemsReceived,
+    viewCountItemsUpserted,
+  };
+
+  console.log("[CompetitorSync][summary]", JSON.stringify(syncSummary));
+
   await db.syncJob.update({
     where: { id: job.id },
     data: {
       status: "completed",
       completedAt: new Date(),
-      metadata: {
-        trackedAccountId,
-        username: account.username,
-        syncMode,
-        requestedLimit: mediaLimit,
-        fetchedMediaCount: allMedia.length,
-        upsertedMediaCount: synced,
-        pagesFetched,
-        oldestFetchedTimestamp,
-        newestFetchedTimestamp,
-        stoppedReason,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
+      metadata: syncSummary as any,
     },
   });
 
-  return { success: true, mediaCount: synced, pagesFetched, stoppedReason, syncMode };
+  return {
+    success: true,
+    mediaCount: synced,
+    pagesFetched,
+    stoppedReason,
+    syncMode,
+    requestedLimit: mediaLimit,
+    fetchedMediaCount: allMedia.length,
+    upsertedMediaCount: synced,
+    oldestFetchedTimestamp,
+    newestFetchedTimestamp,
+    viewCountItemsReceived,
+    viewCountItemsUpserted,
+  };
 }
 
 export async function syncWorkspace(workspaceId: string): Promise<{

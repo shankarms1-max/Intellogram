@@ -317,11 +317,16 @@ export default function MediaPage() {
                   const isCompetitor = item.trackedAccount.accountType !== "own";
                   const isVideo = item.mediaType === "VIDEO";
                   if (process.env.NODE_ENV !== "production" && isCompetitor && isVideo) {
+                    const renderedViewsText = item.viewsCount != null
+                      ? item.viewsCount.toLocaleString()
+                      : "—";
                     console.log("[MediaExplorer][views]", {
                       mediaId: item.instagramMediaId,
                       mediaType: item.mediaType,
                       mediaProductType: item.mediaProductType,
                       viewsCount: item.viewsCount,
+                      typeofViewsCount: typeof item.viewsCount,
+                      renderedViewsText,
                     });
                   }
                   return (
@@ -361,10 +366,10 @@ export default function MediaPage() {
                     </td>
                     <td className="px-4 py-2.5 text-right tabular-nums text-xs">
                       {item.viewsCount != null
-                        ? formatNumber(item.viewsCount)
+                        ? <span title="Views from Meta view_count">{formatNumber(item.viewsCount)}</span>
                         : isCompetitor && isVideo
-                          ? <span title="Views are only returned by Meta for some Instagram competitor videos/Reels.">—</span>
-                          : "—"
+                          ? <span title="Meta did not return view_count for this Reel/video.">—</span>
+                          : <span title="Views are not returned for this media type.">—</span>
                       }
                     </td>
                     <td className="px-4 py-2.5 text-right tabular-nums text-xs font-medium">

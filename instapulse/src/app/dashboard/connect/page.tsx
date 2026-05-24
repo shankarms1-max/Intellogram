@@ -179,9 +179,10 @@ export default function ConnectPage() {
     <div className="max-w-2xl space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold">Connect Instagram</h1>
+        <h1 className="text-2xl font-bold">Connect Facebook &amp; Instagram</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Most users should use <strong>Connect Instagram</strong> below. Agency and enterprise teams can bring their own Meta App for dedicated usage isolation.
+          Meta connection lets Channel Radar discover Facebook Pages you manage and the Instagram Business/Creator accounts linked to those Pages.
+          Most users should use <strong>Connect Meta</strong> below. Agency and enterprise teams can bring their own Meta App for dedicated usage isolation.
         </p>
       </div>
 
@@ -220,7 +221,7 @@ export default function ConnectPage() {
         <div className="text-sm text-blue-800">
           <p className="font-medium">Instagram does not support simple API-key access like YouTube</p>
           <p className="text-blue-700 mt-1 leading-relaxed">
-            Meta API access requires <strong>OAuth</strong>, permissions, and a Business/Creator Instagram account linked to a Facebook Page. There is no single server-side API key. For most users, <strong>Connect Instagram</strong> handles everything automatically. Agencies and enterprise teams can use their own Meta App for dedicated usage isolation.
+            Meta API access requires <strong>OAuth</strong>, permissions, and a Business/Creator Instagram account linked to a Facebook Page. There is no single server-side API key. For most users, <strong>Connect Meta</strong> handles everything automatically — including Facebook Pages and linked Instagram accounts. Agencies and enterprise teams can use their own Meta App for dedicated usage isolation.
           </p>
         </div>
       </div>
@@ -230,7 +231,7 @@ export default function ConnectPage() {
         <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="managed" className="gap-1.5 text-xs">
             <Zap className="h-3.5 w-3.5" />
-            Connect Instagram
+            Connect Meta
           </TabsTrigger>
           <TabsTrigger value="byok_app" className="gap-1.5 text-xs">
             <Building2 className="h-3.5 w-3.5" />
@@ -434,7 +435,7 @@ function ManagedOAuthPanel({
         <div className="flex items-center justify-between">
           <CardTitle className="text-base flex items-center gap-2">
             <Zap className="h-4 w-4 text-violet-600" />
-            Connect Instagram
+            Connect Meta (Facebook &amp; Instagram)
           </CardTitle>
           <div className="flex items-center gap-2">
             {isActive && <Badge variant="outline" className="bg-violet-50 text-violet-700 border-violet-200 text-xs">Active mode</Badge>}
@@ -442,7 +443,8 @@ function ManagedOAuthPanel({
           </div>
         </div>
         <CardDescription>
-          Recommended for most users. Connect your Instagram Business/Creator account using Channel Radar&apos;s managed Meta App. No Meta Developer account required.
+          Recommended for most users. Connect your Facebook Pages and linked Instagram Business/Creator accounts using Channel Radar&apos;s managed Meta App. No Meta Developer account required.
+          Facebook Pages are required for many Instagram Business/Creator API workflows.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">

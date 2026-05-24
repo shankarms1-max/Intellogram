@@ -5,7 +5,7 @@ import { getOrCreateDefaultWorkspace } from "@/lib/workspace";
 import { db } from "@/lib/db";
 
 /**
- * GET /api/debug/media-check?id=<instagramMediaId>[,<id2>,...]
+ * GET /api/debug/media-check?id=<instagramMediaId>[,<id2>,...]&accountId=<optionalAccountId>
  *
  * Returns DB-stored data for specific Instagram media IDs so you can verify
  * that viewsCount was persisted after a competitor sync.
@@ -13,6 +13,7 @@ import { db } from "@/lib/db";
  *
  * Example:
  *   /api/debug/media-check?id=18079952732530197,18043682267771164
+ *   /api/debug/media-check?id=18079952732530197&accountId=<trackedAccountId>
  */
 export async function GET(request: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -38,52 +39,86 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Max 20 IDs per request." }, { status: 400 });
   }
 
+  const accountId = request.nextUrl.searchParams.get("accountId") ?? undefined;
+
   const rows = await db.mediaItem.findMany({
     where: {
       workspaceId: workspace.id,
       instagramMediaId: { in: instagramMediaIds },
+      ...(accountId ? { trackedAccountId: accountId } : {}),
     },
     select: {
       id: true,
       instagramMediaId: true,
+      trackedAccountId: true,
       mediaType: true,
       mediaProductType: true,
+      permalink: true,
       timestamp: true,
       likeCount: true,
       commentsCount: true,
       viewsCount: true,
       engagementRate: true,
       fetchedAt: true,
+      updatedAt: true,
       trackedAccount: { select: { username: true, accountType: true } },
     },
     orderBy: { timestamp: "desc" },
   });
 
-  const found = rows.map((r) => ({
-    instagramMediaId: r.instagramMediaId,
-    account: `@${r.trackedAccount.username} (${r.trackedAccount.accountType})`,
-    mediaType: r.mediaType,
-    mediaProductType: r.mediaProductType,
-    timestamp: r.timestamp,
-    likeCount: r.likeCount,
-    commentsCount: r.commentsCount,
-    viewsCount: r.viewsCount,
-    viewsCountIsNull: r.viewsCount === null,
-    engagementRate: r.engagementRate,
-    fetchedAt: r.fetchedAt,
-  }));
+  const found = instagramMediaIds.map((requestedId) => {
+    const row = rows.find((r) => r.instagramMediaId === requestedId);
+    if (!row) {
+      return { requestedId, found: false };
+    }
+    return {
+      requestedId,
+      found: true,
+      dbId: row.id,
+      instagramMediaId: row.instagramMediaId,
+      accountId: row.trackedAccountId,
+      accountUsername: `@${row.trackedAccount.username}`,
+      platform: "instagram",
+      accountType: row.trackedAccount.accountType,
+      mediaType: row.mediaType,
+      mediaProductType: row.mediaProductType,
+      permalink: row.permalink,
+      timestamp: row.timestamp,
+      viewsCount: row.viewsCount,
+      likeCount: row.likeCount,
+      commentsCount: row.commentsCount,
+      engagementRate: row.engagementRate,
+      fetchedAt: row.fetchedAt,
+      updatedAt: row.updatedAt,
+    };
+  });
 
-  const missingIds = instagramMediaIds.filter(
-    (id) => !rows.some((r) => r.instagramMediaId === id)
+  const foundRows = found.filter((r) => r.found);
+  const missingIds = found.filter((r) => !r.found).map((r) => r.requestedId);
+  const withViewsCount = foundRows.filter(
+    (r) => (r as { viewsCount?: number | null }).viewsCount != null
+  ).length;
+  const withoutViewsCount = foundRows.length - withViewsCount;
+
+  const anyNullViews = foundRows.some(
+    (r) => (r as { viewsCount?: number | null }).viewsCount == null
   );
 
   return NextResponse.json({
     queriedIds: instagramMediaIds,
     found,
+    summary: {
+      requestedCount: instagramMediaIds.length,
+      foundCount: foundRows.length,
+      missingCount: missingIds.length,
+      withViewsCount,
+      withoutViewsCount,
+    },
     missingFromDb: missingIds,
-    totalFound: found.length,
-    hint: found.some((r) => r.viewsCountIsNull)
+    hint: anyNullViews
       ? "Some rows have viewsCount = null. Re-sync the competitor account after the latest deployment to backfill view_count for recent posts. Use /deep-import for older posts."
-      : "All queried rows have viewsCount stored.",
+      : foundRows.length > 0
+        ? "All queried rows have viewsCount stored."
+        : "No rows found — trigger a deep-import for the competitor account first.",
   });
 }

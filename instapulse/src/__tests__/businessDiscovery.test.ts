@@ -360,3 +360,197 @@ describe("Full pipeline: fetch → map → store → display (documented invaria
     expect(SYNC_MODE_LIMITS.manual_deep_import.mediaLimit).toBeGreaterThan(100);
   });
 });
+
+describe("viewCountItemsReceived / viewCountItemsUpserted counter logic", () => {
+  // These tests document the counting logic used in syncCompetitorAccount
+  // to track how many items from Meta included view_count, and how many DB writes included it.
+
+  type FakeItem = { view_count?: number | null };
+
+  function countViewCountItemsReceived(items: FakeItem[]): number {
+    return items.filter((item) => item.view_count != null).length;
+  }
+
+  function countViewCountItemsUpserted(items: FakeItem[]): number {
+    // viewCountIncluded = item.view_count != null (same condition as the upsert spread guard)
+    return items.filter((item) => item.view_count != null).length;
+  }
+
+  it("all VIDEO/REELS with view_count → received = upserted = item count", () => {
+    const items: FakeItem[] = [
+      { view_count: 13765110 },
+      { view_count: 4270137 },
+      { view_count: 99000 },
+    ];
+    expect(countViewCountItemsReceived(items)).toBe(3);
+    expect(countViewCountItemsUpserted(items)).toBe(3);
+  });
+
+  it("mixed batch (IMAGE + REELS) → received and upserted only count non-null", () => {
+    const items: FakeItem[] = [
+      { view_count: 13765110 },
+      { view_count: undefined },     // IMAGE — no view_count
+      { view_count: undefined },     // CAROUSEL — no view_count
+      { view_count: 4270137 },
+    ];
+    expect(countViewCountItemsReceived(items)).toBe(2);
+    expect(countViewCountItemsUpserted(items)).toBe(2);
+  });
+
+  it("all IMAGE batch → received = 0, upserted = 0", () => {
+    const items: FakeItem[] = [
+      { view_count: undefined },
+      { view_count: undefined },
+      { view_count: null },
+    ];
+    expect(countViewCountItemsReceived(items)).toBe(0);
+    expect(countViewCountItemsUpserted(items)).toBe(0);
+  });
+
+  it("view_count = 0 counts as received and upserted (valid value)", () => {
+    const items: FakeItem[] = [{ view_count: 0 }];
+    expect(countViewCountItemsReceived(items)).toBe(1);
+    expect(countViewCountItemsUpserted(items)).toBe(1);
+  });
+
+  it("empty batch → received = 0, upserted = 0", () => {
+    expect(countViewCountItemsReceived([])).toBe(0);
+    expect(countViewCountItemsUpserted([])).toBe(0);
+  });
+});
+
+describe("media-check summary counts logic", () => {
+  // Documents the counting logic for /api/debug/media-check summary
+
+  type MediaRow = { instagramMediaId: string; viewsCount: number | null };
+
+  function buildSummary(
+    requestedIds: string[],
+    rows: MediaRow[]
+  ): { requestedCount: number; foundCount: number; missingCount: number; withViewsCount: number; withoutViewsCount: number } {
+    const found = requestedIds.map((id) => rows.find((r) => r.instagramMediaId === id));
+    const foundRows = found.filter(Boolean) as MediaRow[];
+    const withViewsCount = foundRows.filter((r) => r.viewsCount != null).length;
+    return {
+      requestedCount: requestedIds.length,
+      foundCount: foundRows.length,
+      missingCount: requestedIds.length - foundRows.length,
+      withViewsCount,
+      withoutViewsCount: foundRows.length - withViewsCount,
+    };
+  }
+
+  it("all found, all have viewsCount → summary correct", () => {
+    const ids = ["18079952732530197", "18043682267771164"];
+    const rows: MediaRow[] = [
+      { instagramMediaId: "18079952732530197", viewsCount: 13765110 },
+      { instagramMediaId: "18043682267771164", viewsCount: 4270137 },
+    ];
+    const summary = buildSummary(ids, rows);
+    expect(summary.requestedCount).toBe(2);
+    expect(summary.foundCount).toBe(2);
+    expect(summary.missingCount).toBe(0);
+    expect(summary.withViewsCount).toBe(2);
+    expect(summary.withoutViewsCount).toBe(0);
+  });
+
+  it("one missing → missingCount = 1", () => {
+    const ids = ["18079952732530197", "99999999999999999"];
+    const rows: MediaRow[] = [
+      { instagramMediaId: "18079952732530197", viewsCount: 13765110 },
+    ];
+    const summary = buildSummary(ids, rows);
+    expect(summary.foundCount).toBe(1);
+    expect(summary.missingCount).toBe(1);
+  });
+
+  it("found row with viewsCount = null → withoutViewsCount increments", () => {
+    const ids = ["18079952732530197"];
+    const rows: MediaRow[] = [{ instagramMediaId: "18079952732530197", viewsCount: null }];
+    const summary = buildSummary(ids, rows);
+    expect(summary.withViewsCount).toBe(0);
+    expect(summary.withoutViewsCount).toBe(1);
+  });
+});
+
+describe("media-explorer-check logic (viewsCount stats)", () => {
+  // Documents the stats computation used in /api/debug/media-explorer-check
+
+  type Row = { mediaType: string; mediaProductType: string | null; viewsCount: number | null };
+
+  function computeStats(items: Row[]) {
+    return {
+      totalRows: items.length,
+      videoRows: items.filter((r) => r.mediaType === "VIDEO").length,
+      reelsRows: items.filter((r) => r.mediaProductType === "REELS").length,
+      rowsWithViewsCount: items.filter((r) => r.viewsCount != null).length,
+      rowsWithoutViewsCount: items.filter((r) => r.viewsCount == null).length,
+    };
+  }
+
+  it("mixed batch stats are correct", () => {
+    const items: Row[] = [
+      { mediaType: "VIDEO", mediaProductType: "REELS", viewsCount: 13765110 },
+      { mediaType: "VIDEO", mediaProductType: "REELS", viewsCount: 4270137 },
+      { mediaType: "IMAGE", mediaProductType: "FEED", viewsCount: null },
+      { mediaType: "CAROUSEL_ALBUM", mediaProductType: "FEED", viewsCount: null },
+    ];
+    const stats = computeStats(items);
+    expect(stats.totalRows).toBe(4);
+    expect(stats.videoRows).toBe(2);
+    expect(stats.reelsRows).toBe(2);
+    expect(stats.rowsWithViewsCount).toBe(2);
+    expect(stats.rowsWithoutViewsCount).toBe(2);
+  });
+
+  it("all IMAGE batch → rowsWithViewsCount = 0", () => {
+    const items: Row[] = [
+      { mediaType: "IMAGE", mediaProductType: "FEED", viewsCount: null },
+      { mediaType: "IMAGE", mediaProductType: "FEED", viewsCount: null },
+    ];
+    const stats = computeStats(items);
+    expect(stats.rowsWithViewsCount).toBe(0);
+    expect(stats.rowsWithoutViewsCount).toBe(2);
+  });
+
+  it("viewsCount = 0 counts as withViewsCount (not null)", () => {
+    const items: Row[] = [
+      { mediaType: "VIDEO", mediaProductType: "REELS", viewsCount: 0 },
+    ];
+    expect(computeStats(items).rowsWithViewsCount).toBe(1);
+  });
+});
+
+describe("UI tooltip render logic", () => {
+  // Documents the tooltip logic added in Media Explorer
+
+  function getViewsTooltip(
+    viewsCount: number | null | undefined,
+    isCompetitor: boolean,
+    isVideo: boolean
+  ): string {
+    if (viewsCount != null) return "Views from Meta view_count";
+    if (isCompetitor && isVideo) return "Meta did not return view_count for this Reel/video.";
+    return "Views are not returned for this media type.";
+  }
+
+  it("viewsCount present → 'Views from Meta view_count'", () => {
+    expect(getViewsTooltip(13765110, true, true)).toBe("Views from Meta view_count");
+  });
+
+  it("viewsCount = 0 → 'Views from Meta view_count' (valid value, not null)", () => {
+    expect(getViewsTooltip(0, true, true)).toBe("Views from Meta view_count");
+  });
+
+  it("competitor VIDEO with null viewsCount → Reel-specific tooltip", () => {
+    expect(getViewsTooltip(null, true, true)).toBe("Meta did not return view_count for this Reel/video.");
+  });
+
+  it("own account IMAGE → generic media type tooltip", () => {
+    expect(getViewsTooltip(null, false, false)).toBe("Views are not returned for this media type.");
+  });
+
+  it("IMAGE competitor → generic media type tooltip (not Reel-specific)", () => {
+    expect(getViewsTooltip(null, true, false)).toBe("Views are not returned for this media type.");
+  });
+});
