@@ -74,6 +74,20 @@ export async function syncOwnAccount(
     return { success: false, error: "No active Instagram connection found" };
   }
 
+  // Resolve the IG user ID: prefer the account's stored ID, fall back to the connection's.
+  const resolvedIgUserId = account.instagramUserId ?? connection.instagramUserId;
+  if (!resolvedIgUserId) {
+    await db.syncJob.update({
+      where: { id: job.id },
+      data: { status: "failed", completedAt: new Date(), errorMessage: "Could not resolve Instagram user ID. Please reconnect your Instagram account." },
+    });
+    return { success: false, error: "Could not resolve Instagram user ID. Please reconnect your Instagram account." };
+  }
+  // Backfill missing instagramUserId on the TrackedAccount so future syncs don't need the fallback.
+  if (!account.instagramUserId) {
+    await db.trackedAccount.update({ where: { id: trackedAccountId }, data: { instagramUserId: resolvedIgUserId } });
+  }
+
   let accessToken: string;
   try {
     accessToken = decryptToken(connection.accessTokenEncrypted);
@@ -89,7 +103,7 @@ export async function syncOwnAccount(
     return { success: false, error: "Failed to decrypt access token" };
   }
 
-  const profile = await getAccountProfile(workspaceId, account.instagramUserId!, accessToken);
+  const profile = await getAccountProfile(workspaceId, resolvedIgUserId, accessToken);
 
   if (profile) {
     await db.trackedAccount.update({
@@ -138,7 +152,7 @@ export async function syncOwnAccount(
 
   const mediaItems = await getRecentMedia(
     workspaceId,
-    account.instagramUserId!,
+    resolvedIgUserId,
     accessToken,
     account.fetchLimit
   );
