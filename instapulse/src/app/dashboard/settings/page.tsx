@@ -56,6 +56,7 @@ export default function SettingsPage() {
   const [savingWorkspace, setSavingWorkspace] = useState(false);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [workspaceSuccess, setWorkspaceSuccess] = useState(false);
+  const [metaConfigStatus, setMetaConfigStatus] = useState<{ hasAppId: boolean; hasAppSecret: boolean } | null>(null);
 
   // UI-only sync preferences (not persisted)
   const [autoSync, setAutoSync] = useState(false);
@@ -78,6 +79,10 @@ export default function SettingsPage() {
 
   useEffect(() => {
     fetchWorkspace();
+    fetch("/api/meta/config-status")
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (d) setMetaConfigStatus(d); })
+      .catch(() => {});
   }, [fetchWorkspace]);
 
   async function handleSaveWorkspace(e: React.FormEvent) {
@@ -243,12 +248,12 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-3">
           <StatusIndicator
-            ok={Boolean(process.env.NEXT_PUBLIC_META_APP_ID)}
+            ok={metaConfigStatus?.hasAppId ?? Boolean(process.env.NEXT_PUBLIC_META_APP_ID)}
             label="Meta App ID"
           />
           <Separator />
           <StatusIndicator
-            ok={false /* secret not exposed to client */}
+            ok={metaConfigStatus?.hasAppSecret ?? false}
             label="Meta App Secret"
           />
           <Separator />
