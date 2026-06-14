@@ -57,7 +57,7 @@ export async function POST() {
     );
   }
 
-  const { pagesDiscovered, pages } = await discoverAndStorePages(workspace.id, accessToken);
+  const { pagesDiscovered, pages } = await discoverAndStorePages(workspace.id, accessToken, conn?.id);
 
   return NextResponse.json({
     pagesDiscovered,

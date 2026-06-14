@@ -178,6 +178,8 @@ export interface TokenValidationResult {
   valid: boolean;
   /** Facebook user ID from /me */
   metaUserId: string | null;
+  /** Facebook user display name from /me */
+  facebookUserName: string | null;
   /** Instagram Business/Creator Account ID discovered from /me/accounts */
   instagramUserId: string | null;
   instagramUsername: string | null;
@@ -349,6 +351,7 @@ export async function validateAccessToken(
   const failed = (error: string): TokenValidationResult => ({
     valid: false,
     metaUserId: null,
+    facebookUserName: null,
     instagramUserId: null,
     instagramUsername: null,
     igBusinessAccountId: null,
@@ -471,6 +474,7 @@ export async function validateAccessToken(
   return {
     valid: true,
     metaUserId,
+    facebookUserName: meData.name ?? null,
     // instagramUserId stores the IG Business Account ID, not the Facebook user ID
     instagramUserId: igBusinessAccountId,
     instagramUsername,

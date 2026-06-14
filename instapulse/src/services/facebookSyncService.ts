@@ -33,10 +33,12 @@ export interface DiscoveredPageResult {
 /**
  * Discovers Facebook Pages for a workspace and upserts them into the DB.
  * Access tokens are encrypted before storage. Never exposed in return value.
+ * Pass connectionId to link each page to the InstagramConnection that discovered it.
  */
 export async function discoverAndStorePages(
   workspaceId: string,
-  accessToken: string
+  accessToken: string,
+  connectionId?: string
 ): Promise<{ pagesDiscovered: number; pages: DiscoveredPageResult[] }> {
   const rawPages = await discoverFacebookPages(workspaceId, accessToken);
 
@@ -75,6 +77,18 @@ export async function discoverAndStorePages(
         status: "active",
       },
     });
+
+    // Backfill connectionId separately so the upsert works even before db push.
+    if (connectionId) {
+      try {
+        await db.facebookPage.update({
+          where: { id: upserted.id },
+          data: { connectionId },
+        });
+      } catch {
+        // Non-fatal — connectionId column may not exist in this environment yet.
+      }
+    }
 
     stored.push({
       id: upserted.id,

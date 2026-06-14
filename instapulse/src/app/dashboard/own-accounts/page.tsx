@@ -19,6 +19,9 @@ import {
   Globe,
   Shield,
   AlertTriangle,
+  User,
+  Link2Off,
+  Link2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -52,6 +55,8 @@ interface DiscoveredAsset {
   source: "instagram_connection" | "facebook_page";
   isAuthorized: true;
   connectionId: string | null;
+  facebookUserId: string | null;
+  facebookUserName: string | null;
   instagramUserId: string;
   instagramUsername: string;
   displayName: string | null;
@@ -65,6 +70,23 @@ interface DiscoveredAsset {
   trackedAccountId: string | null;
   trackedAccount: TrackedAccountRef | null;
   facebookPage: FacebookPageRef | null;
+}
+
+interface ConnectionInGroup {
+  id: string;
+  instagramUserId: string;
+  instagramUsername: string;
+  status: string;
+  tokenExpiresAt: string | null;
+  updatedAt: string;
+}
+
+interface GroupedConnection {
+  groupKey: string;
+  facebookUserId: string | null;
+  facebookUserName: string | null;
+  connections: ConnectionInGroup[];
+  assets: DiscoveredAsset[];
 }
 
 interface OwnAccount {
@@ -143,6 +165,7 @@ function OwnAccountsInner() {
   const connectedCount = searchParams.get("connected");
 
   const [assets, setAssets] = useState<DiscoveredAsset[]>([]);
+  const [groupedConnections, setGroupedConnections] = useState<GroupedConnection[]>([]);
   const [ownAccounts, setOwnAccounts] = useState<OwnAccount[]>([]);
   const [primary, setPrimary] = useState<PrimaryDiscovery | null>(null);
   const [loading, setLoading] = useState(true);
@@ -153,10 +176,12 @@ function OwnAccountsInner() {
     assetsFound: number;
     ownAccountsFound: number;
     assetsNotTrackedAsOwn: number;
+    activeConnectionsFound: number;
+    metaIdentitiesFound: number;
     errors: string[];
   } | null>(null);
 
-  // Per-asset/account action state: key → "adding"|"removing"|"syncing"
+  // Per-asset/account action state: key → "adding"|"removing"|"syncing"|"disconnecting"
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -176,6 +201,7 @@ function OwnAccountsInner() {
 
       const data = await assetsRes.json() as {
         assets: DiscoveredAsset[];
+        groupedConnections?: GroupedConnection[];
         ownAccounts: OwnAccount[];
         orphanPages: unknown[];
         _diag?: {
@@ -184,11 +210,14 @@ function OwnAccountsInner() {
           assetsFound?: number;
           ownAccountsFound?: number;
           assetsNotTrackedAsOwn?: number;
+          activeConnectionsFound?: number;
+          metaIdentitiesFound?: number;
           errors?: string[];
         };
       };
 
       setAssets(data.assets ?? []);
+      setGroupedConnections(data.groupedConnections ?? []);
       setOwnAccounts(data.ownAccounts ?? []);
       if (data._diag) {
         setDiag({
@@ -197,6 +226,8 @@ function OwnAccountsInner() {
           assetsFound: data._diag.assetsFound ?? (data.assets?.length ?? 0),
           ownAccountsFound: data._diag.ownAccountsFound ?? 0,
           assetsNotTrackedAsOwn: data._diag.assetsNotTrackedAsOwn ?? 0,
+          activeConnectionsFound: data._diag.activeConnectionsFound ?? 0,
+          metaIdentitiesFound: data._diag.metaIdentitiesFound ?? 0,
           errors: data._diag.errors ?? [],
         });
       }
@@ -319,15 +350,33 @@ function OwnAccountsInner() {
     }
   }
 
+  async function handleDisconnectGroup(group: GroupedConnection) {
+    const groupKey = group.groupKey;
+    setAction(groupKey, "disconnecting");
+    setActionError(null);
+    try {
+      // Disconnect each connection in the group
+      await Promise.all(
+        group.connections.map((conn) =>
+          fetch(
+            `/api/instagram/connections?instagramUserId=${encodeURIComponent(conn.instagramUserId)}`,
+            { method: "DELETE" }
+          )
+        )
+      );
+      await fetchData();
+    } catch (e: unknown) {
+      setActionError(e instanceof Error ? e.message : "Could not disconnect Meta connection");
+    } finally {
+      setAction(groupKey, null);
+    }
+  }
+
   // ─── Derived ─────────────────────────────────────────────────────────────
 
-  // Assets already tracked as own
   const assetsWithOwn = assets.filter((a) => a.isTrackedAsOwn);
-  // Authorized assets not yet tracked as own — eligible for Add as Own
   const assetsWithoutOwn = assets.filter((a) => !a.isTrackedAsOwn && a.status !== "disconnected");
-  // Own accounts not discoverable from any Meta OAuth connection — unauthorized
   const unauthorizedOwnAccounts = ownAccounts.filter((a) => !a.hasConnection);
-  // Authorized own accounts (have matching OAuth connection)
   const authorizedOwnAccounts = ownAccounts.filter((a) => a.hasConnection);
 
   // ─── Render ──────────────────────────────────────────────────────────────
@@ -336,11 +385,20 @@ function OwnAccountsInner() {
     <div className="space-y-6 max-w-3xl">
 
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold">Own Instagram Accounts</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          Your workspace can track multiple own Instagram accounts. Connect Meta once, then choose which client accounts to monitor.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">Own Instagram Accounts</h1>
+          <p className="text-muted-foreground text-sm mt-1">
+            Connect one or more Meta accounts to discover Instagram Business and Creator accounts you manage.
+            Choose which client accounts to track as own in this workspace.
+          </p>
+        </div>
+        <a href="/dashboard/connect">
+          <Button variant="outline" size="sm" className="shrink-0 gap-1.5 text-xs">
+            <Link2 className="h-3.5 w-3.5" />
+            Connect another Meta account
+          </Button>
+        </a>
       </div>
 
       {/* New connection banner */}
@@ -364,7 +422,8 @@ function OwnAccountsInner() {
       {!loading && diag && (
         <div className="rounded-md border border-dashed border-muted-foreground/30 bg-muted/30 px-4 py-3 text-xs text-muted-foreground space-y-0.5">
           <p className="font-medium text-foreground text-xs mb-1">Meta Assets Diagnostic</p>
-          <p>OAuth connections found: <span className="font-mono font-semibold text-foreground">{diag.connectionsFound}</span></p>
+          <p>Meta identities (authorizing users): <span className="font-mono font-semibold text-foreground">{diag.metaIdentitiesFound}</span></p>
+          <p>Active OAuth connections: <span className="font-mono font-semibold text-foreground">{diag.activeConnectionsFound}</span></p>
           <p>Facebook Pages found: <span className="font-mono font-semibold text-foreground">{diag.pagesFound}</span></p>
           <p>Instagram assets found: <span className="font-mono font-semibold text-foreground">{diag.assetsFound}</span></p>
           <p>Own accounts found: <span className="font-mono font-semibold text-foreground">{diag.ownAccountsFound}</span></p>
@@ -419,18 +478,18 @@ function OwnAccountsInner() {
                 Connected Meta Assets
               </CardTitle>
               <CardDescription>
-                Instagram Business/Creator accounts discovered from your Meta OAuth authorization.
-                Accounts not yet tracked show an <strong>Add as Own</strong> button.
-                Already-tracked accounts show a <strong>Remove</strong> button.
+                Instagram Business/Creator accounts discovered from your Meta OAuth authorizations,
+                grouped by the Meta account that authorized them.
+                Use <strong>Add as Own</strong> to track an account, or <strong>Remove</strong> to stop tracking it.
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-4">
               {assets.length === 0 ? (
                 <div className="rounded-lg border border-dashed border-border py-6 text-center text-sm text-muted-foreground px-4">
                   <p className="font-medium text-foreground mb-1">No authorized Instagram assets found</p>
                   <p>
                     <a href="/dashboard/connect" className="text-violet-600 hover:underline">
-                      Connect your Meta account
+                      Connect a Meta account
                     </a>{" "}
                     and make sure your Instagram Business or Creator account is linked to a Facebook Page.
                   </p>
@@ -440,7 +499,156 @@ function OwnAccountsInner() {
                     </p>
                   )}
                 </div>
+              ) : groupedConnections.length > 0 ? (
+                /* Grouped view — one section per Meta identity */
+                <div className="space-y-5">
+                  {groupedConnections.map((group, gIdx) => {
+                    const groupAction = actionLoading[group.groupKey];
+                    const earliestExpiry = group.connections
+                      .map((c) => c.tokenExpiresAt)
+                      .filter(Boolean)
+                      .sort()[0];
+                    const expiryDate = earliestExpiry
+                      ? new Date(earliestExpiry).toLocaleDateString()
+                      : null;
+                    const allDisconnected = group.connections.every((c) => c.status === "disconnected");
+                    const groupLabel = group.facebookUserName
+                      ? group.facebookUserName
+                      : group.connections.length === 1
+                      ? `@${group.connections[0].instagramUsername}`
+                      : `${group.connections.length} accounts`;
+
+                    return (
+                      <div key={group.groupKey}>
+                        {gIdx > 0 && <Separator />}
+                        {/* Connection identity header */}
+                        <div className="flex items-center justify-between gap-3 py-2">
+                          <div className="flex items-center gap-2">
+                            <div className="h-7 w-7 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
+                              <User className="h-3.5 w-3.5 text-blue-600" />
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-sm font-semibold text-foreground">
+                                  Connected via {groupLabel}
+                                </span>
+                                {allDisconnected ? (
+                                  <Badge variant="outline" className="bg-gray-50 text-gray-600 border-gray-200 text-xs gap-1">
+                                    <XCircle className="h-3 w-3" /> Disconnected
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-xs gap-1">
+                                    <CheckCircle2 className="h-3 w-3" /> Active
+                                  </Badge>
+                                )}
+                              </div>
+                              <p className="text-xs text-muted-foreground">
+                                {group.assets.length} Instagram account{group.assets.length !== 1 ? "s" : ""}
+                                {expiryDate && ` · Token expires ${expiryDate}`}
+                              </p>
+                            </div>
+                          </div>
+                          {!allDisconnected && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDisconnectGroup(group)}
+                              disabled={!!groupAction}
+                              className="text-xs text-muted-foreground hover:text-red-600 hover:bg-red-50 gap-1"
+                              title="Disconnect this Meta authorization"
+                            >
+                              {groupAction === "disconnecting"
+                                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                : <Link2Off className="h-3.5 w-3.5" />}
+                              Disconnect
+                            </Button>
+                          )}
+                        </div>
+
+                        {/* Assets within this group */}
+                        <div className="space-y-2 pl-9">
+                          {group.assets.map((asset, idx) => {
+                            const assetKey = asset.instagramUserId || asset.instagramUsername;
+                            const action = actionLoading[assetKey];
+
+                            return (
+                              <div key={asset.connectionId ?? asset.instagramUserId}>
+                                {idx > 0 && <Separator className="my-2" />}
+                                <div className="flex items-center gap-3">
+                                  <Avatar
+                                    username={asset.instagramUsername}
+                                    pictureUrl={asset.profilePictureUrl ?? asset.trackedAccount?.profilePictureUrl}
+                                    size={9}
+                                  />
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span className="font-medium text-sm">@{asset.instagramUsername}</span>
+                                      {asset.source === "instagram_connection" && (
+                                        <ConnectionStatusBadge status={asset.status} />
+                                      )}
+                                      {asset.source === "facebook_page" && (
+                                        <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-xs gap-1">
+                                          <Globe className="h-3 w-3" /> Via Page
+                                        </Badge>
+                                      )}
+                                      {asset.isTrackedAsOwn && (
+                                        <Badge variant="outline" className="bg-violet-50 text-violet-700 border-violet-200 text-xs">
+                                          Tracked as own
+                                        </Badge>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground flex-wrap">
+                                      {asset.facebookPage && (
+                                        <span className="flex items-center gap-1">
+                                          <Globe className="h-3 w-3" />
+                                          {asset.facebookPage.name}
+                                        </span>
+                                      )}
+                                      {(asset.followersCount ?? asset.trackedAccount?.followersCount) != null && (
+                                        <span>{formatNumber((asset.followersCount ?? asset.trackedAccount?.followersCount)!)} followers</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    {asset.isTrackedAsOwn ? (
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => handleRemoveFromOwn(asset.trackedAccountId!, assetKey)}
+                                        disabled={!!action}
+                                        className="text-red-600 border-red-200 hover:bg-red-50 text-xs"
+                                      >
+                                        {action === "removing"
+                                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                          : <MinusCircle className="h-3.5 w-3.5" />}
+                                        Remove
+                                      </Button>
+                                    ) : (
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => handleAddAsOwn(asset)}
+                                        disabled={!!action}
+                                        className="text-violet-700 border-violet-200 hover:bg-violet-50 text-xs"
+                                      >
+                                        {action === "adding"
+                                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                          : <PlusCircle className="h-3.5 w-3.5" />}
+                                        Add as Own
+                                      </Button>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               ) : (
+                /* Flat fallback when groupedConnections not available */
                 assets.map((asset, idx) => {
                   const assetKey = asset.instagramUserId || asset.instagramUsername;
                   const action = actionLoading[assetKey];
@@ -462,11 +670,6 @@ function OwnAccountsInner() {
                             {asset.source === "instagram_connection" && (
                               <ConnectionStatusBadge status={asset.status} />
                             )}
-                            {asset.source === "facebook_page" && (
-                              <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-xs gap-1">
-                                <Globe className="h-3 w-3" /> Via Page
-                              </Badge>
-                            )}
                             {asset.isTrackedAsOwn && (
                               <Badge variant="outline" className="bg-violet-50 text-violet-700 border-violet-200 text-xs">
                                 Tracked as own
@@ -474,12 +677,6 @@ function OwnAccountsInner() {
                             )}
                           </div>
                           <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
-                            {asset.facebookPage && (
-                              <span className="flex items-center gap-1">
-                                <Globe className="h-3 w-3" />
-                                {asset.facebookPage.name}
-                              </span>
-                            )}
                             {expiry && (
                               <span className="flex items-center gap-1">
                                 <Clock className="h-3 w-3" />
@@ -543,14 +740,19 @@ function OwnAccountsInner() {
                   <div className="text-xs text-emerald-700">
                     <p className="font-medium">All connected accounts are being tracked as own.</p>
                     <p className="mt-0.5">
-                      Click <strong>Remove</strong> on an account to stop tracking it as own — an <strong>Add as Own</strong> button will then appear for that account.
-                      To track additional Instagram accounts, <a href="/dashboard/connect" className="underline">reconnect Meta</a> with those accounts authorized.
+                      Click <strong>Remove</strong> on an account to stop tracking it as own.
+                      To track additional Instagram accounts,{" "}
+                      <a href="/dashboard/connect" className="underline">connect another Meta account</a>.
                     </p>
                   </div>
                 </div>
               )}
 
-              <div className="flex justify-end pt-1">
+              <div className="flex items-center justify-between pt-1">
+                <a href="/dashboard/connect" className="text-xs text-violet-600 hover:underline flex items-center gap-1">
+                  <Link2 className="h-3 w-3" />
+                  Connect another Meta account
+                </a>
                 <Button variant="ghost" size="sm" onClick={fetchData} className="text-xs text-muted-foreground">
                   <RefreshCw className="h-3.5 w-3.5 mr-1" />
                   Refresh

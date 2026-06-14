@@ -32,35 +32,127 @@ export async function GET() {
   };
 
   // ── 1. Fetch InstagramConnections (source of OAuth tokens) ─────────────────
+  // Uses an explicit select so new columns (facebookUserId, facebookUserName) degrade
+  // gracefully before db push runs in production.
 
-  let connections: Awaited<ReturnType<typeof db.instagramConnection.findMany>> = [];
+  type ConnectionRow = {
+    id: string;
+    instagramUserId: string;
+    instagramUsername: string;
+    status: string;
+    tokenExpiresAt: Date | null;
+    scopes: string[];
+    updatedAt: Date;
+    facebookUserId: string | null;
+    facebookUserName: string | null;
+  };
+
+  let connections: ConnectionRow[] = [];
   try {
     connections = await db.instagramConnection.findMany({
       where: { workspaceId: workspace.id },
+      select: {
+        id: true,
+        instagramUserId: true,
+        instagramUsername: true,
+        status: true,
+        tokenExpiresAt: true,
+        scopes: true,
+        updatedAt: true,
+        facebookUserId: true,
+        facebookUserName: true,
+      },
       orderBy: { updatedAt: "desc" },
     });
     diag.connectionsFound = connections.length;
     console.log(`[discovered-assets] userId=${user.id} workspaceId=${workspace.id} connections=${connections.length}`);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    (diag.errors as string[]).push(`connections: ${msg}`);
-    console.error("[discovered-assets] Error fetching InstagramConnections:", msg);
+  } catch {
+    // Fallback: fetch without new columns (pre-migration environments)
+    try {
+      const fallback = await db.instagramConnection.findMany({
+        where: { workspaceId: workspace.id },
+        select: {
+          id: true,
+          instagramUserId: true,
+          instagramUsername: true,
+          status: true,
+          tokenExpiresAt: true,
+          scopes: true,
+          updatedAt: true,
+        },
+        orderBy: { updatedAt: "desc" },
+      });
+      connections = fallback.map((c) => ({ ...c, facebookUserId: null, facebookUserName: null }));
+      diag.connectionsFound = connections.length;
+      (diag.errors as string[]).push("connections: used fallback select (facebookUserId/facebookUserName columns may be missing)");
+      console.log(`[discovered-assets] connections fallback=${connections.length}`);
+    } catch (e2) {
+      const msg = e2 instanceof Error ? e2.message : String(e2);
+      (diag.errors as string[]).push(`connections: ${msg}`);
+      console.error("[discovered-assets] Error fetching InstagramConnections:", msg);
+    }
   }
 
   // ── 2. Fetch FacebookPages ─────────────────────────────────────────────────
+  // connectionId column degrades gracefully before db push runs.
 
-  let pages: Awaited<ReturnType<typeof db.facebookPage.findMany>> = [];
+  type PageRow = {
+    id: string;
+    facebookPageId: string;
+    name: string;
+    category: string | null;
+    pictureUrl: string | null;
+    linkedInstagramAccountId: string | null;
+    linkedInstagramUsername: string | null;
+    updatedAt: Date;
+    connectionId: string | null;
+  };
+
+  let pages: PageRow[] = [];
   try {
     pages = await db.facebookPage.findMany({
       where: { workspaceId: workspace.id },
+      select: {
+        id: true,
+        facebookPageId: true,
+        name: true,
+        category: true,
+        pictureUrl: true,
+        linkedInstagramAccountId: true,
+        linkedInstagramUsername: true,
+        updatedAt: true,
+        connectionId: true,
+      },
       orderBy: { name: "asc" },
     });
     diag.pagesFound = pages.length;
     console.log(`[discovered-assets] facebookPages=${pages.length}`);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    (diag.errors as string[]).push(`pages: ${msg}`);
-    console.error("[discovered-assets] Error fetching FacebookPages:", msg);
+  } catch {
+    // Fallback: fetch without connectionId
+    try {
+      const fallback = await db.facebookPage.findMany({
+        where: { workspaceId: workspace.id },
+        select: {
+          id: true,
+          facebookPageId: true,
+          name: true,
+          category: true,
+          pictureUrl: true,
+          linkedInstagramAccountId: true,
+          linkedInstagramUsername: true,
+          updatedAt: true,
+        },
+        orderBy: { name: "asc" },
+      });
+      pages = fallback.map((p) => ({ ...p, connectionId: null }));
+      diag.pagesFound = pages.length;
+      (diag.errors as string[]).push("pages: used fallback select (connectionId column may be missing)");
+      console.log(`[discovered-assets] pages fallback=${pages.length}`);
+    } catch (e2) {
+      const msg = e2 instanceof Error ? e2.message : String(e2);
+      (diag.errors as string[]).push(`pages: ${msg}`);
+      console.error("[discovered-assets] Error fetching FacebookPages:", msg);
+    }
   }
 
   // ── 3. Fetch own TrackedAccounts — independent from connections ───────────
@@ -161,6 +253,8 @@ export async function GET() {
       source: "instagram_connection" as const,
       isAuthorized: true as const,
       connectionId: conn.id,
+      facebookUserId: conn.facebookUserId ?? null,
+      facebookUserName: conn.facebookUserName ?? null,
       instagramUserId: conn.instagramUserId,
       instagramUsername: conn.instagramUsername,
       displayName: ta?.displayName ?? null,
@@ -249,6 +343,54 @@ export async function GET() {
   diag.assetsNotTrackedAsOwn = allAssets.filter((a) => !a.isTrackedAsOwn).length;
   console.log(`[discovered-assets] allAssets=${allAssets.length} notTracked=${diag.assetsNotTrackedAsOwn}`);
 
+  // ── 5. Build grouped connections[] view ────────────────────────────────────
+  //
+  // Group assets by facebookUserId (same Facebook identity = same Meta authorization).
+  // Falls back to connectionId as the group key when facebookUserId is not stored.
+  type GroupedConnection = {
+    groupKey: string;
+    facebookUserId: string | null;
+    facebookUserName: string | null;
+    connections: Array<{
+      id: string;
+      instagramUserId: string;
+      instagramUsername: string;
+      status: string;
+      tokenExpiresAt: Date | null;
+      updatedAt: Date;
+    }>;
+    assets: typeof allAssets;
+  };
+
+  const connectionGroupMap = new Map<string, GroupedConnection>();
+  for (const asset of allAssets) {
+    if (asset.source !== "instagram_connection") continue;
+    const groupKey = asset.facebookUserId ?? asset.connectionId ?? asset.instagramUserId;
+    if (!groupKey) continue;
+    if (!connectionGroupMap.has(groupKey)) {
+      connectionGroupMap.set(groupKey, {
+        groupKey,
+        facebookUserId: asset.facebookUserId ?? null,
+        facebookUserName: asset.facebookUserName ?? null,
+        connections: [],
+        assets: [],
+      });
+    }
+    const grp = connectionGroupMap.get(groupKey)!;
+    if (asset.connectionId && !grp.connections.some((c) => c.id === asset.connectionId)) {
+      grp.connections.push({
+        id: asset.connectionId,
+        instagramUserId: asset.instagramUserId,
+        instagramUsername: asset.instagramUsername,
+        status: asset.status,
+        tokenExpiresAt: asset.tokenExpiresAt ?? null,
+        updatedAt: asset.updatedAt,
+      });
+    }
+    grp.assets.push(asset);
+  }
+  const groupedConnections = Array.from(connectionGroupMap.values());
+
   // Orphan pages listed separately (backward compat)
   const orphanPages = pages
     .filter((p) => p.linkedInstagramAccountId && !connectedIgIds.has(p.linkedInstagramAccountId))
@@ -279,8 +421,12 @@ export async function GET() {
     hasConnection: ta.instagramUserId ? connectedIgIds.has(ta.instagramUserId) : false,
   }));
 
+  diag.activeConnectionsFound = connections.filter((c) => c.status === "active").length;
+  diag.metaIdentitiesFound = groupedConnections.length;
+
   return NextResponse.json({
     assets: allAssets,
+    groupedConnections,
     ownAccounts: ownAccountsResponse,
     orphanPages,
     _diag: diag,

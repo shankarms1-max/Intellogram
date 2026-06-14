@@ -77,6 +77,10 @@ export async function handleOAuthCallback(
   const expiresAt = validation.expiresAt ?? new Date(Date.now() + longToken.expiresIn * 1000);
   const encryptedToken = encryptToken(longToken.accessToken);
 
+  // Facebook user identity — same for all connections from this OAuth flow.
+  const facebookUserId = validation.valid ? (validation.metaUserId ?? undefined) : undefined;
+  const facebookUserName = validation.valid ? (validation.facebookUserName ?? undefined) : undefined;
+
   // When exactly one account is discovered, auto-add as own (backward compat for
   // personal/single-brand workspaces). When multiple are discovered, store the
   // OAuth connection so tokens are available, but let the user choose which
@@ -109,6 +113,31 @@ export async function handleOAuthCallback(
         status: "active",
       },
     });
+
+    // ── Step 2: Backfill Meta identity fields (guarded — columns may not exist yet) ──
+    if (facebookUserId || facebookUserName) {
+      try {
+        await db.instagramConnection.update({
+          where: { id: connection.id },
+          data: {
+            ...(facebookUserId ? { facebookUserId } : {}),
+            ...(facebookUserName ? { facebookUserName } : {}),
+          },
+        });
+      } catch {
+        // Non-fatal — columns may not exist in this environment yet.
+      }
+    }
+
+    // ── Step 3: Link any FacebookPage rows associated with this IG account ────
+    try {
+      await db.facebookPage.updateMany({
+        where: { workspaceId, linkedInstagramAccountId: account.id, connectionId: null },
+        data: { connectionId: connection.id },
+      });
+    } catch {
+      // Non-fatal — column may not exist yet in this environment.
+    }
 
     if (autoAddAsOwn) {
       // ── Single account: existing auto-add-as-own behavior ───────────────────

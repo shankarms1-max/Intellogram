@@ -148,12 +148,15 @@ model InstagramConnection {
   status               String    @default("active")
   pageId               String?
   pageName             String?
+  facebookUserId       String?
+  facebookUserName     String?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
   workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   trackedAccounts TrackedAccount[]
+  facebookPages   FacebookPage[]
 
   @@unique([workspaceId, instagramUserId])
   @@index([workspaceId])
@@ -350,12 +353,14 @@ model FacebookPage {
   linkedInstagramUsername  String?
   discoverySource          String?
   status                   String    @default("active")
+  connectionId             String?
   lastSyncedAt             DateTime?
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @updatedAt
 
-  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  posts     FacebookPagePost[]
+  workspace  Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  connection InstagramConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  posts      FacebookPagePost[]
 
   @@unique([workspaceId, facebookPageId])
   @@index([workspaceId])
