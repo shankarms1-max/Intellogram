@@ -352,7 +352,9 @@ function OwnAccountsInner() {
               Meta connected — {connectedCount} Instagram account{connectedCount !== "1" ? "s" : ""} discovered
             </p>
             <p className="text-xs text-violet-700 mt-0.5">
-              All discovered accounts have been added as own accounts below. Remove any you don&apos;t want to track.
+              {Number(connectedCount) > 1
+                ? "We found multiple Instagram accounts. Use the Add as Own button below to choose which client accounts to track."
+                : "Your account has been connected and added as an own account."}
             </p>
           </div>
         </div>
