@@ -245,6 +245,9 @@ export async function GET() {
     });
 
   const allAssets = [...assets, ...pageOnlyAssets];
+  diag.assetsFound = allAssets.length;
+  diag.assetsNotTrackedAsOwn = allAssets.filter((a) => !a.isTrackedAsOwn).length;
+  console.log(`[discovered-assets] allAssets=${allAssets.length} notTracked=${diag.assetsNotTrackedAsOwn}`);
 
   // Orphan pages listed separately (backward compat)
   const orphanPages = pages

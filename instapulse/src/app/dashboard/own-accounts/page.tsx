@@ -147,6 +147,14 @@ function OwnAccountsInner() {
   const [primary, setPrimary] = useState<PrimaryDiscovery | null>(null);
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [diag, setDiag] = useState<{
+    connectionsFound: number;
+    pagesFound: number;
+    assetsFound: number;
+    ownAccountsFound: number;
+    assetsNotTrackedAsOwn: number;
+    errors: string[];
+  } | null>(null);
 
   // Per-asset/account action state: key → "adding"|"removing"|"syncing"
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
@@ -170,11 +178,28 @@ function OwnAccountsInner() {
         assets: DiscoveredAsset[];
         ownAccounts: OwnAccount[];
         orphanPages: unknown[];
-        _diag?: Record<string, unknown>;
+        _diag?: {
+          connectionsFound?: number;
+          pagesFound?: number;
+          assetsFound?: number;
+          ownAccountsFound?: number;
+          assetsNotTrackedAsOwn?: number;
+          errors?: string[];
+        };
       };
 
       setAssets(data.assets ?? []);
       setOwnAccounts(data.ownAccounts ?? []);
+      if (data._diag) {
+        setDiag({
+          connectionsFound: data._diag.connectionsFound ?? 0,
+          pagesFound: data._diag.pagesFound ?? 0,
+          assetsFound: data._diag.assetsFound ?? (data.assets?.length ?? 0),
+          ownAccountsFound: data._diag.ownAccountsFound ?? 0,
+          assetsNotTrackedAsOwn: data._diag.assetsNotTrackedAsOwn ?? 0,
+          errors: data._diag.errors ?? [],
+        });
+      }
 
       if (primaryRes.ok) {
         const primaryData = await primaryRes.json() as PrimaryDiscovery;
@@ -333,6 +358,21 @@ function OwnAccountsInner() {
         </div>
       )}
 
+      {/* ─── Debug counts panel ─── */}
+      {!loading && diag && (
+        <div className="rounded-md border border-dashed border-muted-foreground/30 bg-muted/30 px-4 py-3 text-xs text-muted-foreground space-y-0.5">
+          <p className="font-medium text-foreground text-xs mb-1">Meta Assets Diagnostic</p>
+          <p>OAuth connections found: <span className="font-mono font-semibold text-foreground">{diag.connectionsFound}</span></p>
+          <p>Facebook Pages found: <span className="font-mono font-semibold text-foreground">{diag.pagesFound}</span></p>
+          <p>Instagram assets found: <span className="font-mono font-semibold text-foreground">{diag.assetsFound}</span></p>
+          <p>Own accounts found: <span className="font-mono font-semibold text-foreground">{diag.ownAccountsFound}</span></p>
+          <p>Assets available to add as own: <span className="font-mono font-semibold text-foreground">{diag.assetsNotTrackedAsOwn}</span></p>
+          {diag.errors.length > 0 && (
+            <p className="text-red-600 mt-1">Errors: {diag.errors.join("; ")}</p>
+          )}
+        </div>
+      )}
+
       {/* Action-level errors */}
       {actionError && (
         <div className="flex items-center gap-2 rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
@@ -377,7 +417,9 @@ function OwnAccountsInner() {
                 Connected Meta Assets
               </CardTitle>
               <CardDescription>
-                Instagram accounts discovered from your Meta OAuth authorization.
+                Instagram Business/Creator accounts discovered from your Meta OAuth authorization.
+                Accounts not yet tracked show an <strong>Add as Own</strong> button.
+                Already-tracked accounts show a <strong>Remove</strong> button.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -482,13 +524,27 @@ function OwnAccountsInner() {
                 })
               )}
 
-              {assetsWithoutOwn.length > 0 && (
+              {/* Status tips */}
+              {assets.length > 0 && assetsWithoutOwn.length > 0 && (
                 <div className="flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 mt-2">
                   <Info className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
                   <p className="text-xs text-amber-700">
-                    {assetsWithoutOwn.length} connected account{assetsWithoutOwn.length > 1 ? "s are" : " is"} not
-                    tracked as own. Click &quot;Add as Own&quot; above to monitor {assetsWithoutOwn.length > 1 ? "them" : "it"}.
+                    {assetsWithoutOwn.length} connected account{assetsWithoutOwn.length > 1 ? "s are" : " is"} not yet
+                    tracked as own. Click <strong>Add as Own</strong> above to monitor {assetsWithoutOwn.length > 1 ? "them" : "it"}.
                   </p>
+                </div>
+              )}
+
+              {assets.length > 0 && assetsWithoutOwn.length === 0 && assetsWithOwn.length > 0 && (
+                <div className="flex items-start gap-2 rounded-md bg-emerald-50 border border-emerald-200 px-3 py-2 mt-2">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
+                  <div className="text-xs text-emerald-700">
+                    <p className="font-medium">All connected accounts are being tracked as own.</p>
+                    <p className="mt-0.5">
+                      Click <strong>Remove</strong> on an account to stop tracking it as own — an <strong>Add as Own</strong> button will then appear for that account.
+                      To track additional Instagram accounts, <a href="/dashboard/connect" className="underline">reconnect Meta</a> with those accounts authorized.
+                    </p>
+                  </div>
                 </div>
               )}
 
