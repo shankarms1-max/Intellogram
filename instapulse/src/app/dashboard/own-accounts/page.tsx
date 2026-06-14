@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { Suspense, useEffect, useState, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Aperture,
@@ -18,6 +18,7 @@ import {
   Info,
   Globe,
   Shield,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -57,6 +58,21 @@ interface DiscoveredAsset {
   updatedAt: string;
   trackedAccount: TrackedAccountRef | null;
   facebookPage: FacebookPageRef | null;
+}
+
+interface OwnAccount {
+  id: string;
+  username: string;
+  displayName: string | null;
+  profilePictureUrl: string | null;
+  followersCount: number | null;
+  mediaCount: number | null;
+  status: string;
+  lastSyncedAt: string | null;
+  isActive: boolean;
+  instagramUserId: string | null;
+  connectionId: string | null;
+  hasConnection: boolean;
 }
 
 interface PrimaryDiscovery {
@@ -112,39 +128,57 @@ function Avatar({ username, pictureUrl, size = 10 }: { username: string; picture
   );
 }
 
-// ─── Page ─────────────────────────────────────────────────────────────────────
+// ─── Inner page (needs searchParams) ─────────────────────────────────────────
 
-export default function OwnAccountsPage() {
+function OwnAccountsInner() {
   const searchParams = useSearchParams();
   const newConnection = searchParams.get("new_connection") === "true";
   const connectedCount = searchParams.get("connected");
 
   const [assets, setAssets] = useState<DiscoveredAsset[]>([]);
+  const [ownAccounts, setOwnAccounts] = useState<OwnAccount[]>([]);
   const [primary, setPrimary] = useState<PrimaryDiscovery | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [apiError, setApiError] = useState<string | null>(null);
 
-  // Per-asset action state
-  const [actionLoading, setActionLoading] = useState<Record<string, string>>({}); // connectionId → action
+  // Per-asset/account action state: key → "adding"|"removing"|"syncing"
+  const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
-    setError(null);
+    setApiError(null);
     try {
       const [assetsRes, primaryRes] = await Promise.all([
         fetch("/api/meta/discovered-assets"),
         fetch("/api/meta/primary-discovery"),
       ]);
-      if (!assetsRes.ok) throw new Error("Failed to load connected assets");
-      const assetsData = await assetsRes.json() as { assets: DiscoveredAsset[] };
-      setAssets(assetsData.assets ?? []);
+
+      if (!assetsRes.ok) {
+        const body = await assetsRes.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error || `API error ${assetsRes.status}`);
+      }
+
+      const data = await assetsRes.json() as {
+        assets: DiscoveredAsset[];
+        ownAccounts: OwnAccount[];
+        orphanPages: unknown[];
+        _diag?: Record<string, unknown>;
+      };
+
+      setAssets(data.assets ?? []);
+      setOwnAccounts(data.ownAccounts ?? []);
 
       if (primaryRes.ok) {
         const primaryData = await primaryRes.json() as PrimaryDiscovery;
         setPrimary(primaryData);
       }
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Could not load data");
+      setApiError(
+        e instanceof Error
+          ? e.message
+          : "Could not load Meta assets. Please check server logs or reconnect Meta."
+      );
     } finally {
       setLoading(false);
     }
@@ -154,35 +188,39 @@ export default function OwnAccountsPage() {
 
   // ─── Actions ─────────────────────────────────────────────────────────────
 
-  async function handleAddAsOwn(asset: DiscoveredAsset) {
-    setActionLoading((prev) => ({ ...prev, [asset.connectionId]: "adding" }));
+  function setAction(key: string, action: string | null) {
+    setActionLoading((prev) => {
+      const next = { ...prev };
+      if (action) next[key] = action;
+      else delete next[key];
+      return next;
+    });
+  }
+
+  async function handleAddAsOwn(instagramUsername: string) {
+    setAction(instagramUsername, "adding");
+    setActionError(null);
     try {
       const res = await fetch("/api/accounts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: asset.instagramUsername,
-          accountType: "own",
-          displayName: asset.instagramUsername,
-        }),
+        body: JSON.stringify({ username: instagramUsername, accountType: "own" }),
       });
-      if (!res.ok) {
-        const d = await res.json() as { error?: string };
-        throw new Error(d.error || "Failed to add account");
-      }
+      const d = await res.json() as { error?: string };
+      if (!res.ok) throw new Error(d.error || "Failed to add account");
       await fetchData();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Could not add account");
+      setActionError(e instanceof Error ? e.message : "Could not add account");
     } finally {
-      setActionLoading((prev) => { const n = { ...prev }; delete n[asset.connectionId]; return n; });
+      setAction(instagramUsername, null);
     }
   }
 
-  async function handleRemoveFromOwn(asset: DiscoveredAsset) {
-    if (!asset.trackedAccount) return;
-    setActionLoading((prev) => ({ ...prev, [asset.connectionId]: "removing" }));
+  async function handleRemoveFromOwn(accountId: string, key: string) {
+    setAction(key, "removing");
+    setActionError(null);
     try {
-      const res = await fetch(`/api/accounts/${asset.trackedAccount.id}`, {
+      const res = await fetch(`/api/accounts/${accountId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accountType: "other" }),
@@ -190,26 +228,27 @@ export default function OwnAccountsPage() {
       if (!res.ok) throw new Error("Failed to update account");
       await fetchData();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Could not remove account");
+      setActionError(e instanceof Error ? e.message : "Could not remove account");
     } finally {
-      setActionLoading((prev) => { const n = { ...prev }; delete n[asset.connectionId]; return n; });
+      setAction(key, null);
     }
   }
 
-  async function handleSync(asset: DiscoveredAsset) {
-    if (!asset.trackedAccount) return;
-    setActionLoading((prev) => ({ ...prev, [asset.connectionId]: "syncing" }));
+  async function handleSync(accountId: string, key: string) {
+    setAction(key, "syncing");
+    setActionError(null);
     try {
-      await fetch(`/api/accounts/${asset.trackedAccount.id}/sync`, { method: "POST" });
+      await fetch(`/api/accounts/${accountId}/sync`, { method: "POST" });
       await fetchData();
     } catch {
       // silently ignore
     } finally {
-      setActionLoading((prev) => { const n = { ...prev }; delete n[asset.connectionId]; return n; });
+      setAction(key, null);
     }
   }
 
   async function handleSetPrimary(instagramUserId: string) {
+    setActionError(null);
     try {
       const res = await fetch("/api/meta/primary-discovery", {
         method: "POST",
@@ -219,14 +258,18 @@ export default function OwnAccountsPage() {
       if (!res.ok) throw new Error("Failed to set primary account");
       await fetchData();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Could not set primary account");
+      setActionError(e instanceof Error ? e.message : "Could not set primary account");
     }
   }
 
   // ─── Derived ─────────────────────────────────────────────────────────────
 
-  const ownAssets = assets.filter((a) => a.trackedAccount !== null);
-  const untracked = assets.filter((a) => a.trackedAccount === null && a.status === "active");
+  // Own accounts that have a matching active connection (shown in Section 1 toggle)
+  const assetsWithOwn = assets.filter((a) => a.trackedAccount !== null);
+  // Connections that have no own account yet
+  const assetsWithoutOwn = assets.filter((a) => a.trackedAccount === null && a.status === "active");
+  // Own accounts with no connection (pre-connectionId data)
+  const ownWithoutConnection = ownAccounts.filter((a) => !a.hasConnection);
 
   // ─── Render ──────────────────────────────────────────────────────────────
 
@@ -242,7 +285,7 @@ export default function OwnAccountsPage() {
       </div>
 
       {/* New connection banner */}
-      {newConnection && (
+      {newConnection && !loading && !apiError && (
         <div className="flex items-start gap-3 rounded-lg bg-violet-50 border border-violet-200 px-4 py-3">
           <CheckCircle2 className="h-5 w-5 text-violet-600 shrink-0 mt-0.5" />
           <div>
@@ -256,11 +299,12 @@ export default function OwnAccountsPage() {
         </div>
       )}
 
-      {error && (
+      {/* Action-level errors */}
+      {actionError && (
         <div className="flex items-center gap-2 rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
           <AlertCircle className="h-4 w-4 shrink-0" />
-          {error}
-          <Button variant="ghost" size="sm" onClick={() => setError(null)} className="ml-auto text-red-600 hover:text-red-700">
+          {actionError}
+          <Button variant="ghost" size="sm" onClick={() => setActionError(null)} className="ml-auto text-red-600">
             Dismiss
           </Button>
         </div>
@@ -270,6 +314,24 @@ export default function OwnAccountsPage() {
         <div className="flex items-center justify-center py-16 text-muted-foreground gap-2">
           <Loader2 className="h-6 w-6 animate-spin" />
           <span className="text-sm">Loading connected accounts…</span>
+        </div>
+      ) : apiError ? (
+        /* ─── Full API failure state ─── */
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 rounded-lg bg-red-50 border border-red-200 px-4 py-4">
+            <AlertCircle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-red-800">Could not load Meta assets</p>
+              <p className="text-xs text-red-700 mt-1">{apiError}</p>
+              <p className="text-xs text-red-600 mt-1">
+                Check server logs for details. If the issue persists, try reconnecting your Meta account.
+              </p>
+            </div>
+            <Button size="sm" variant="outline" onClick={fetchData} className="shrink-0">
+              <RefreshCw className="h-3.5 w-3.5 mr-1" />
+              Retry
+            </Button>
+          </div>
         </div>
       ) : (
         <>
@@ -281,21 +343,26 @@ export default function OwnAccountsPage() {
                 Connected Meta Assets
               </CardTitle>
               <CardDescription>
-                All Instagram accounts discovered from your Meta authorization. Each represents an active OAuth connection.
+                Instagram accounts discovered from your Meta OAuth authorization.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               {assets.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-border py-8 text-center text-sm text-muted-foreground">
-                  No Meta connections found.{" "}
+                <div className="rounded-lg border border-dashed border-border py-6 text-center text-sm text-muted-foreground">
+                  No OAuth connections found.{" "}
                   <a href="/dashboard/connect" className="text-violet-600 hover:underline">
                     Connect your Meta account
                   </a>{" "}
-                  to get started.
+                  to link Instagram accounts via OAuth.
+                  {ownAccounts.length > 0 && (
+                    <p className="mt-1 text-xs">
+                      Your existing tracked accounts are listed in Own Instagram Accounts below.
+                    </p>
+                  )}
                 </div>
               ) : (
                 assets.map((asset, idx) => {
-                  const action = actionLoading[asset.connectionId];
+                  const action = actionLoading[asset.instagramUsername];
                   const isOwn = asset.trackedAccount !== null;
                   const expiry = asset.tokenExpiresAt
                     ? new Date(asset.tokenExpiresAt).toLocaleDateString()
@@ -342,30 +409,26 @@ export default function OwnAccountsPage() {
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => handleRemoveFromOwn(asset)}
+                              onClick={() => handleRemoveFromOwn(asset.trackedAccount!.id, asset.instagramUsername)}
                               disabled={!!action}
                               className="text-red-600 border-red-200 hover:bg-red-50 text-xs"
                             >
-                              {action === "removing" ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              ) : (
-                                <MinusCircle className="h-3.5 w-3.5" />
-                              )}
+                              {action === "removing"
+                                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                : <MinusCircle className="h-3.5 w-3.5" />}
                               Remove
                             </Button>
                           ) : (
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => handleAddAsOwn(asset)}
+                              onClick={() => handleAddAsOwn(asset.instagramUsername)}
                               disabled={!!action}
                               className="text-violet-700 border-violet-200 hover:bg-violet-50 text-xs"
                             >
-                              {action === "adding" ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              ) : (
-                                <PlusCircle className="h-3.5 w-3.5" />
-                              )}
+                              {action === "adding"
+                                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                : <PlusCircle className="h-3.5 w-3.5" />}
                               Add as Own
                             </Button>
                           )}
@@ -376,18 +439,18 @@ export default function OwnAccountsPage() {
                 })
               )}
 
-              {untracked.length > 0 && (
+              {assetsWithoutOwn.length > 0 && (
                 <div className="flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 mt-2">
                   <Info className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
                   <p className="text-xs text-amber-700">
-                    {untracked.length} connected account{untracked.length > 1 ? "s are" : " is"} not being tracked as own.
-                    Click &quot;Add as Own&quot; above to include {untracked.length > 1 ? "them" : "it"} in your workspace.
+                    {assetsWithoutOwn.length} connected account{assetsWithoutOwn.length > 1 ? "s are" : " is"} not
+                    tracked as own. Click &quot;Add as Own&quot; above to monitor {assetsWithoutOwn.length > 1 ? "them" : "it"}.
                   </p>
                 </div>
               )}
 
               <div className="flex justify-end pt-1">
-                <Button variant="ghost" size="sm" onClick={fetchData} disabled={loading} className="text-xs text-muted-foreground">
+                <Button variant="ghost" size="sm" onClick={fetchData} className="text-xs text-muted-foreground">
                   <RefreshCw className="h-3.5 w-3.5 mr-1" />
                   Refresh
                 </Button>
@@ -407,21 +470,50 @@ export default function OwnAccountsPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              {ownAssets.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-border py-8 text-center text-sm text-muted-foreground">
-                  No own accounts are being tracked. Add accounts from Connected Meta Assets above.
+
+              {/* Warning for pre-connectionId accounts */}
+              {ownWithoutConnection.length > 0 && (
+                <div className="flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2">
+                  <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                  <p className="text-xs text-amber-700">
+                    {ownWithoutConnection.length > 1
+                      ? `${ownWithoutConnection.length} accounts were`
+                      : "1 account was"}{" "}
+                    tracked before OAuth connection linking was added. Sync still works.{" "}
+                    <a href="/dashboard/connect" className="underline">
+                      Reconnect Meta
+                    </a>{" "}
+                    to link them to an active OAuth connection.
+                  </p>
+                </div>
+              )}
+
+              {ownAccounts.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-border py-6 text-center text-sm text-muted-foreground">
+                  No own accounts are being tracked.
+                  {assets.length > 0 ? (
+                    <> Add an account from Connected Meta Assets above.</>
+                  ) : (
+                    <>
+                      {" "}
+                      <a href="/dashboard/connect" className="text-violet-600 hover:underline">
+                        Connect your Meta account
+                      </a>{" "}
+                      to get started.
+                    </>
+                  )}
                 </div>
               ) : (
-                ownAssets.map((asset, idx) => {
-                  const ta = asset.trackedAccount!;
-                  const action = actionLoading[asset.connectionId];
-                  const isPrimary = primary?.instagramUserId === asset.instagramUserId;
+                ownAccounts.map((ta, idx) => {
+                  const key = ta.id;
+                  const action = actionLoading[key];
+                  const isPrimary = primary?.instagramUserId === ta.instagramUserId;
                   const lastSynced = ta.lastSyncedAt
                     ? new Date(ta.lastSyncedAt).toLocaleDateString()
                     : "Never";
 
                   return (
-                    <div key={asset.connectionId}>
+                    <div key={ta.id}>
                       {idx > 0 && <Separator className="my-3" />}
                       <div className="flex items-start gap-3">
                         <Avatar username={ta.username} pictureUrl={ta.profilePictureUrl} size={10} />
@@ -436,6 +528,11 @@ export default function OwnAccountsPage() {
                                 <Star className="h-3 w-3" /> Primary
                               </Badge>
                             )}
+                            {!ta.hasConnection && (
+                              <Badge variant="outline" className="bg-gray-50 text-gray-500 border-gray-200 text-xs">
+                                No connection link
+                              </Badge>
+                            )}
                           </div>
                           <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
                             {ta.followersCount != null && (
@@ -448,11 +545,11 @@ export default function OwnAccountsPage() {
                           </div>
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
-                          {!isPrimary && (
+                          {!isPrimary && ta.instagramUserId && (
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => handleSetPrimary(asset.instagramUserId)}
+                              onClick={() => handleSetPrimary(ta.instagramUserId!)}
                               className="text-xs text-yellow-700 border-yellow-200 hover:bg-yellow-50"
                               title="Set as primary account for competitor discovery"
                             >
@@ -463,28 +560,24 @@ export default function OwnAccountsPage() {
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => handleSync(asset)}
+                            onClick={() => handleSync(ta.id, key)}
                             disabled={!!action}
                             title="Sync now"
                           >
-                            {action === "syncing" ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <RotateCw className="h-3.5 w-3.5" />
-                            )}
+                            {action === "syncing"
+                              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              : <RotateCw className="h-3.5 w-3.5" />}
                           </Button>
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => handleRemoveFromOwn(asset)}
+                            onClick={() => handleRemoveFromOwn(ta.id, key)}
                             disabled={!!action}
                             className="text-red-600 border-red-200 hover:bg-red-50 text-xs"
                           >
-                            {action === "removing" ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <MinusCircle className="h-3.5 w-3.5" />
-                            )}
+                            {action === "removing"
+                              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              : <MinusCircle className="h-3.5 w-3.5" />}
                             Remove
                           </Button>
                         </div>
@@ -521,7 +614,9 @@ export default function OwnAccountsPage() {
                       <p className="text-xs text-muted-foreground">{primary.displayName}</p>
                     )}
                     {primary.followersCount != null && (
-                      <p className="text-xs text-muted-foreground">{formatNumber(primary.followersCount)} followers</p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatNumber(primary.followersCount)} followers
+                      </p>
                     )}
                   </div>
                   <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200 text-xs gap-1 shrink-0">
@@ -532,38 +627,35 @@ export default function OwnAccountsPage() {
                 <div className="flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2">
                   <Info className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
                   <p className="text-xs text-amber-700">
-                    No primary discovery account set. The most recently updated active connection will be used automatically.
-                    Set a primary account above for consistent competitor tracking.
+                    No primary discovery account set. The most recently active connection will be used automatically.
+                    Set a primary account below for consistent competitor tracking.
                   </p>
                 </div>
               )}
 
-              {ownAssets.length > 0 && (
+              {ownAccounts.filter((a) => a.instagramUserId).length > 0 && (
                 <>
                   <Separator />
                   <div className="space-y-2">
                     <p className="text-xs font-medium text-muted-foreground">Change primary account</p>
                     <div className="space-y-1.5">
-                      {ownAssets.map((asset) => {
-                        const ta = asset.trackedAccount!;
-                        const isPrimary = primary?.instagramUserId === asset.instagramUserId;
+                      {ownAccounts.filter((a) => a.instagramUserId).map((ta) => {
+                        const isPrimary = primary?.instagramUserId === ta.instagramUserId;
                         return (
                           <div
-                            key={asset.connectionId}
-                            className={`flex items-center gap-3 rounded-md border px-3 py-2 ${
+                            key={ta.id}
+                            className={`flex items-center gap-3 rounded-md border px-3 py-2 transition-colors ${
                               isPrimary
                                 ? "border-yellow-200 bg-yellow-50"
                                 : "border-border bg-background hover:bg-muted/50 cursor-pointer"
                             }`}
-                            onClick={() => !isPrimary && handleSetPrimary(asset.instagramUserId)}
+                            onClick={() => !isPrimary && handleSetPrimary(ta.instagramUserId!)}
                           >
                             <Avatar username={ta.username} pictureUrl={ta.profilePictureUrl} size={7} />
                             <span className="text-sm flex-1">@{ta.username}</span>
-                            {isPrimary ? (
-                              <Star className="h-4 w-4 text-yellow-600 shrink-0" />
-                            ) : (
-                              <StarOff className="h-4 w-4 text-muted-foreground shrink-0" />
-                            )}
+                            {isPrimary
+                              ? <Star className="h-4 w-4 text-yellow-600 shrink-0" />
+                              : <StarOff className="h-4 w-4 text-muted-foreground shrink-0" />}
                           </div>
                         );
                       })}
@@ -576,5 +668,22 @@ export default function OwnAccountsPage() {
         </>
       )}
     </div>
+  );
+}
+
+// ─── Page wrapper with Suspense for useSearchParams ───────────────────────────
+
+export default function OwnAccountsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center py-16 text-muted-foreground gap-2">
+          <Loader2 className="h-6 w-6 animate-spin" />
+          <span className="text-sm">Loading…</span>
+        </div>
+      }
+    >
+      <OwnAccountsInner />
+    </Suspense>
   );
 }

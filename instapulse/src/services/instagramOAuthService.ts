@@ -136,9 +136,8 @@ export async function handleOAuthCallback(
       },
     });
 
-    // Backfill connectionId as a separate non-fatal step. If the column doesn't
-    // exist yet in the production DB (migration pending), this silently no-ops
-    // and sync continues to work via the instagramUserId fallback.
+    // Backfill connectionId on the upserted row (matched by username).
+    // Separate try-catch: if the column is missing in production, OAuth still completes.
     try {
       await db.trackedAccount.update({
         where: { id: trackedAccount.id },
@@ -146,6 +145,24 @@ export async function handleOAuthCallback(
       });
     } catch {
       // Column not yet migrated in this environment — safe to ignore.
+    }
+
+    // Backfill connectionId on any other own rows that share the same instagramUserId
+    // (covers accounts where the username changed since they were first tracked).
+    // Conditions: own account only, connectionId still null, not the row we just updated.
+    try {
+      await db.trackedAccount.updateMany({
+        where: {
+          workspaceId,
+          instagramUserId: account.id,
+          accountType: "own",
+          connectionId: null,
+          NOT: { id: trackedAccount.id },
+        },
+        data: { connectionId: connection.id },
+      });
+    } catch {
+      // Safe to ignore — backfill only, does not block OAuth completion.
     }
 
     connected++;
