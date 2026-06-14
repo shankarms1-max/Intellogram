@@ -35,10 +35,12 @@ export async function GET(request: NextRequest) {
   const user = session.user as { id: string; name?: string | null };
 
   let workspaceId: string | undefined;
+  let connectAnother = false;
   if (stateParam) {
     try {
       const decoded = JSON.parse(Buffer.from(stateParam, "base64url").toString());
       workspaceId = decoded.workspaceId ?? undefined;
+      connectAnother = decoded.connectAnother === true;
     } catch {
       // ignore malformed state
     }
@@ -48,6 +50,8 @@ export async function GET(request: NextRequest) {
     const workspace = await getOrCreateDefaultWorkspace(user.id, user.name);
     workspaceId = workspace.id;
   }
+
+  console.log(`[meta/callback] connectAnother=${connectAnother} workspaceId=${workspaceId}`);
 
   // Use workspace-specific credentials (BYOK App) or platform credentials (Managed)
   const { appId, appSecret } = await resolveOAuthAppCredentials(workspaceId);
@@ -63,16 +67,27 @@ export async function GET(request: NextRequest) {
     redirectUri
   );
 
+  console.log(`[meta/callback] success=${result.success} accountsConnected=${result.accountsConnected} facebookUserId=${result.facebookUserId ?? "unknown"} isExistingMetaIdentity=${result.isExistingMetaIdentity}`);
+
   if (!result.success) {
     return NextResponse.redirect(
       `${baseUrl}/dashboard/connect?error=${encodeURIComponent(result.error || "Connection failed")}`
     );
   }
 
-  // When multiple accounts are discovered, redirect to own-accounts page so
-  // the user can choose which ones to keep as own. Single-account users get
-  // the existing connect success screen (backward compat).
   const accountsConnected = result.accountsConnected ?? 0;
+
+  // connect_another flow → always redirect to own-accounts with identity context
+  if (connectAnother) {
+    const identityParam = result.isExistingMetaIdentity
+      ? "reconnected_existing=true"
+      : "new_meta_identity=true";
+    return NextResponse.redirect(
+      `${baseUrl}/dashboard/own-accounts?${identityParam}&connected=${accountsConnected}`
+    );
+  }
+
+  // Standard flow: multi-account → own-accounts, single → connect success screen
   if (accountsConnected > 1) {
     return NextResponse.redirect(
       `${baseUrl}/dashboard/own-accounts?new_connection=true&connected=${accountsConnected}`

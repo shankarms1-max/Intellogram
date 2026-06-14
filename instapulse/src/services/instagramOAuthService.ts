@@ -10,7 +10,8 @@ import { db } from "@/lib/db";
 export function buildOAuthUrl(
   state: string,
   appId: string,
-  redirectUri: string
+  redirectUri: string,
+  options?: { forceReauth?: boolean }
 ): string {
   const scopeList = [
     "instagram_basic",
@@ -36,6 +37,16 @@ export function buildOAuthUrl(
     state,
   });
 
+  // Force Facebook to show the login/account-selection screen so the user can
+  // authenticate as a different Facebook identity. auth_type=reauthenticate is
+  // a documented Meta parameter that bypasses the existing Facebook session.
+  if (options?.forceReauth) {
+    params.set("auth_type", "reauthenticate");
+    console.log("[buildOAuthUrl] force_reauth=true → auth_type=reauthenticate added to OAuth URL");
+  } else {
+    console.log("[buildOAuthUrl] force_reauth=false → standard OAuth URL");
+  }
+
   return `https://www.facebook.com/dialog/oauth?${params.toString()}`;
 }
 
@@ -46,7 +57,7 @@ export async function handleOAuthCallback(
   appId: string,
   appSecret: string,
   redirectUri: string
-): Promise<{ success: boolean; error?: string; accountsConnected?: number }> {
+): Promise<{ success: boolean; error?: string; accountsConnected?: number; facebookUserId?: string | null; isExistingMetaIdentity?: boolean }> {
   const shortToken = await exchangeCodeForToken(code, redirectUri, appId, appSecret);
   if (!shortToken) {
     return { success: false, error: "Failed to exchange authorization code for access token" };
@@ -80,6 +91,24 @@ export async function handleOAuthCallback(
   // Facebook user identity — same for all connections from this OAuth flow.
   const facebookUserId = validation.valid ? (validation.metaUserId ?? undefined) : undefined;
   const facebookUserName = validation.valid ? (validation.facebookUserName ?? undefined) : undefined;
+
+  console.log(`[handleOAuthCallback] facebookUserId=${facebookUserId ?? "unknown"} facebookUserName=${facebookUserName ?? "unknown"}`);
+
+  // Pre-check: does this facebookUserId already have active connections in this workspace?
+  // Used by the callback route to distinguish "reconnected existing" from "new identity".
+  let isExistingMetaIdentity = false;
+  if (facebookUserId) {
+    try {
+      const existingConn = await db.instagramConnection.findFirst({
+        where: { workspaceId, facebookUserId, status: "active" },
+        select: { id: true },
+      });
+      isExistingMetaIdentity = existingConn !== null;
+      console.log(`[handleOAuthCallback] isExistingMetaIdentity=${isExistingMetaIdentity}`);
+    } catch {
+      // Non-fatal — facebookUserId column may not exist yet.
+    }
+  }
 
   // When exactly one account is discovered, auto-add as own (backward compat for
   // personal/single-brand workspaces). When multiple are discovered, store the
@@ -246,7 +275,12 @@ export async function handleOAuthCallback(
     connected++;
   }
 
-  return { success: true, accountsConnected: connected };
+  return {
+    success: true,
+    accountsConnected: connected,
+    facebookUserId: facebookUserId ?? null,
+    isExistingMetaIdentity,
+  };
 }
 
 export async function disconnectInstagram(

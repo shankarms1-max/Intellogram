@@ -22,6 +22,7 @@ import {
   User,
   Link2Off,
   Link2,
+  ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -162,6 +163,8 @@ function Avatar({ username, pictureUrl, size = 10 }: { username: string; picture
 function OwnAccountsInner() {
   const searchParams = useSearchParams();
   const newConnection = searchParams.get("new_connection") === "true";
+  const reconnectedExisting = searchParams.get("reconnected_existing") === "true";
+  const newMetaIdentity = searchParams.get("new_meta_identity") === "true";
   const connectedCount = searchParams.get("connected");
 
   const [assets, setAssets] = useState<DiscoveredAsset[]>([]);
@@ -184,6 +187,8 @@ function OwnAccountsInner() {
   // Per-asset/account action state: key → "adding"|"removing"|"syncing"|"disconnecting"
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
   const [actionError, setActionError] = useState<string | null>(null);
+  const [connectAnotherLoading, setConnectAnotherLoading] = useState(false);
+  const [connectAnotherError, setConnectAnotherError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -350,6 +355,23 @@ function OwnAccountsInner() {
     }
   }
 
+  async function handleConnectAnother() {
+    setConnectAnotherLoading(true);
+    setConnectAnotherError(null);
+    try {
+      const res = await fetch("/api/auth/meta/start?force_reauth=1&connect_another=1");
+      if (!res.ok) {
+        const data = await res.json() as { error?: string };
+        throw new Error(data.error || "Could not start Meta connection");
+      }
+      const { url } = await res.json() as { url: string };
+      window.location.href = url;
+    } catch (e: unknown) {
+      setConnectAnotherError(e instanceof Error ? e.message : "Could not start Meta connection");
+      setConnectAnotherLoading(false);
+    }
+  }
+
   async function handleDisconnectGroup(group: GroupedConnection) {
     const groupKey = group.groupKey;
     setAction(groupKey, "disconnecting");
@@ -393,12 +415,18 @@ function OwnAccountsInner() {
             Choose which client accounts to track as own in this workspace.
           </p>
         </div>
-        <a href="/dashboard/connect">
-          <Button variant="outline" size="sm" className="shrink-0 gap-1.5 text-xs">
-            <Link2 className="h-3.5 w-3.5" />
-            Connect another Meta account
-          </Button>
-        </a>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleConnectAnother}
+          disabled={connectAnotherLoading}
+          className="shrink-0 gap-1.5 text-xs"
+        >
+          {connectAnotherLoading
+            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            : <Link2 className="h-3.5 w-3.5" />}
+          Connect another Meta account
+        </Button>
       </div>
 
       {/* New connection banner */}
@@ -415,6 +443,61 @@ function OwnAccountsInner() {
                 : "Your account has been connected and added as an own account."}
             </p>
           </div>
+        </div>
+      )}
+
+      {/* Same Meta identity reconnected */}
+      {reconnectedExisting && !loading && !apiError && (
+        <div className="flex items-start gap-3 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3">
+          <Info className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-amber-800">
+              This Meta account is already connected
+            </p>
+            <p className="text-xs text-amber-700 mt-0.5">
+              Facebook authenticated the same identity that&apos;s already linked to this workspace — your token and assets have been refreshed.
+              To add a <strong>different</strong> Facebook account, choose another Facebook profile during login or use an incognito window.
+            </p>
+            <div className="flex items-center gap-3 mt-2">
+              <button
+                onClick={handleConnectAnother}
+                disabled={connectAnotherLoading}
+                className="text-xs text-amber-800 underline hover:no-underline disabled:opacity-50"
+              >
+                {connectAnotherLoading ? "Starting…" : "Try again"}
+              </button>
+              <span className="text-xs text-amber-600 flex items-center gap-1">
+                <ExternalLink className="h-3 w-3" />
+                Or open in an incognito window and log into a different Facebook account first
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New Meta identity connected */}
+      {newMetaIdentity && !loading && !apiError && (
+        <div className="flex items-start gap-3 rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-3">
+          <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-emerald-800">
+              New Meta account connected — {connectedCount} Instagram account{connectedCount !== "1" ? "s" : ""} discovered
+            </p>
+            <p className="text-xs text-emerald-700 mt-0.5">
+              A new Meta authorization group now appears below. Use <strong>Add as Own</strong> to choose which accounts to track.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Connect Another error */}
+      {connectAnotherError && (
+        <div className="flex items-center gap-2 rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          {connectAnotherError}
+          <Button variant="ghost" size="sm" onClick={() => setConnectAnotherError(null)} className="ml-auto text-red-600">
+            Dismiss
+          </Button>
         </div>
       )}
 
@@ -748,15 +831,28 @@ function OwnAccountsInner() {
                 </div>
               )}
 
-              <div className="flex items-center justify-between pt-1">
-                <a href="/dashboard/connect" className="text-xs text-violet-600 hover:underline flex items-center gap-1">
-                  <Link2 className="h-3 w-3" />
-                  Connect another Meta account
-                </a>
-                <Button variant="ghost" size="sm" onClick={fetchData} className="text-xs text-muted-foreground">
-                  <RefreshCw className="h-3.5 w-3.5 mr-1" />
-                  Refresh
-                </Button>
+              <div className="space-y-2 pt-1">
+                <div className="flex items-center justify-between">
+                  <button
+                    onClick={handleConnectAnother}
+                    disabled={connectAnotherLoading}
+                    className="text-xs text-violet-600 hover:underline flex items-center gap-1 disabled:opacity-50"
+                  >
+                    {connectAnotherLoading
+                      ? <Loader2 className="h-3 w-3 animate-spin" />
+                      : <Link2 className="h-3 w-3" />}
+                    Connect another Meta account
+                  </button>
+                  <Button variant="ghost" size="sm" onClick={fetchData} className="text-xs text-muted-foreground">
+                    <RefreshCw className="h-3.5 w-3.5 mr-1" />
+                    Refresh
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  To add client assets managed under a different Facebook identity, connect another Meta account.
+                  Facebook will ask you to re-authenticate — if it reuses the same account,{" "}
+                  log out of Facebook first or use an incognito window.
+                </p>
               </div>
             </CardContent>
           </Card>
