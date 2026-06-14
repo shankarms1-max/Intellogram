@@ -49,13 +49,20 @@ interface TrackedAccountRef {
 }
 
 interface DiscoveredAsset {
-  connectionId: string;
+  source: "instagram_connection" | "facebook_page";
+  isAuthorized: true;
+  connectionId: string | null;
   instagramUserId: string;
   instagramUsername: string;
+  displayName: string | null;
+  profilePictureUrl: string | null;
+  followersCount: number | null;
   status: string;
   tokenExpiresAt: string | null;
   scopes: string[];
   updatedAt: string;
+  isTrackedAsOwn: boolean;
+  trackedAccountId: string | null;
   trackedAccount: TrackedAccountRef | null;
   facebookPage: FacebookPageRef | null;
 }
@@ -197,14 +204,21 @@ function OwnAccountsInner() {
     });
   }
 
-  async function handleAddAsOwn(instagramUsername: string) {
-    setAction(instagramUsername, "adding");
+  async function handleAddAsOwn(asset: DiscoveredAsset) {
+    const key = asset.instagramUserId || asset.instagramUsername;
+    setAction(key, "adding");
     setActionError(null);
     try {
-      const res = await fetch("/api/accounts", {
+      const res = await fetch("/api/meta/own-accounts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: instagramUsername, accountType: "own" }),
+        body: JSON.stringify({
+          instagramUserId: asset.instagramUserId,
+          username: asset.instagramUsername,
+          connectionId: asset.connectionId ?? undefined,
+          displayName: asset.displayName ?? undefined,
+          profilePictureUrl: asset.profilePictureUrl ?? undefined,
+        }),
       });
       const d = await res.json() as { error?: string };
       if (!res.ok) throw new Error(d.error || "Failed to add account");
@@ -212,7 +226,7 @@ function OwnAccountsInner() {
     } catch (e: unknown) {
       setActionError(e instanceof Error ? e.message : "Could not add account");
     } finally {
-      setAction(instagramUsername, null);
+      setAction(key, null);
     }
   }
 
@@ -282,10 +296,10 @@ function OwnAccountsInner() {
 
   // ─── Derived ─────────────────────────────────────────────────────────────
 
-  // Own accounts that have a matching active connection (shown in Section 1 toggle)
-  const assetsWithOwn = assets.filter((a) => a.trackedAccount !== null);
-  // Connections that have no own account yet
-  const assetsWithoutOwn = assets.filter((a) => a.trackedAccount === null && a.status === "active");
+  // Assets already tracked as own
+  const assetsWithOwn = assets.filter((a) => a.isTrackedAsOwn);
+  // Authorized assets not yet tracked as own — eligible for Add as Own
+  const assetsWithoutOwn = assets.filter((a) => !a.isTrackedAsOwn && a.status !== "disconnected");
   // Own accounts not discoverable from any Meta OAuth connection — unauthorized
   const unauthorizedOwnAccounts = ownAccounts.filter((a) => !a.hasConnection);
   // Authorized own accounts (have matching OAuth connection)
@@ -368,39 +382,48 @@ function OwnAccountsInner() {
             </CardHeader>
             <CardContent className="space-y-3">
               {assets.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-border py-6 text-center text-sm text-muted-foreground">
-                  No OAuth connections found.{" "}
-                  <a href="/dashboard/connect" className="text-violet-600 hover:underline">
-                    Connect your Meta account
-                  </a>{" "}
-                  to link Instagram accounts via OAuth.
+                <div className="rounded-lg border border-dashed border-border py-6 text-center text-sm text-muted-foreground px-4">
+                  <p className="font-medium text-foreground mb-1">No authorized Instagram assets found</p>
+                  <p>
+                    <a href="/dashboard/connect" className="text-violet-600 hover:underline">
+                      Connect your Meta account
+                    </a>{" "}
+                    and make sure your Instagram Business or Creator account is linked to a Facebook Page.
+                  </p>
                   {ownAccounts.length > 0 && (
-                    <p className="mt-1 text-xs">
-                      Your existing tracked accounts are listed in Own Instagram Accounts below.
+                    <p className="mt-2 text-xs">
+                      Existing tracked accounts are listed in Own Instagram Accounts below.
                     </p>
                   )}
                 </div>
               ) : (
                 assets.map((asset, idx) => {
-                  const action = actionLoading[asset.instagramUsername];
-                  const isOwn = asset.trackedAccount !== null;
+                  const assetKey = asset.instagramUserId || asset.instagramUsername;
+                  const action = actionLoading[assetKey];
                   const expiry = asset.tokenExpiresAt
                     ? new Date(asset.tokenExpiresAt).toLocaleDateString()
                     : null;
 
                   return (
-                    <div key={asset.connectionId}>
+                    <div key={asset.connectionId ?? asset.instagramUserId}>
                       {idx > 0 && <Separator className="my-3" />}
                       <div className="flex items-center gap-3">
                         <Avatar
                           username={asset.instagramUsername}
-                          pictureUrl={asset.trackedAccount?.profilePictureUrl}
+                          pictureUrl={asset.profilePictureUrl ?? asset.trackedAccount?.profilePictureUrl}
                         />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-medium text-sm">@{asset.instagramUsername}</span>
-                            <ConnectionStatusBadge status={asset.status} />
-                            {isOwn && (
+                            {asset.source === "instagram_connection" && (
+                              <ConnectionStatusBadge status={asset.status} />
+                            )}
+                            {asset.source === "facebook_page" && (
+                              <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-xs gap-1">
+                                <Globe className="h-3 w-3" /> Via Page
+                              </Badge>
+                            )}
+                            {asset.isTrackedAsOwn && (
                               <Badge variant="outline" className="bg-violet-50 text-violet-700 border-violet-200 text-xs">
                                 Tracked as own
                               </Badge>
@@ -419,17 +442,17 @@ function OwnAccountsInner() {
                                 Token expires {expiry}
                               </span>
                             )}
-                            {asset.trackedAccount?.followersCount != null && (
-                              <span>{formatNumber(asset.trackedAccount.followersCount)} followers</span>
+                            {(asset.followersCount ?? asset.trackedAccount?.followersCount) != null && (
+                              <span>{formatNumber((asset.followersCount ?? asset.trackedAccount?.followersCount)!)} followers</span>
                             )}
                           </div>
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0">
-                          {isOwn ? (
+                          {asset.isTrackedAsOwn ? (
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => handleRemoveFromOwn(asset.trackedAccount!.id, asset.instagramUsername)}
+                              onClick={() => handleRemoveFromOwn(asset.trackedAccountId!, assetKey)}
                               disabled={!!action}
                               className="text-red-600 border-red-200 hover:bg-red-50 text-xs"
                             >
@@ -442,7 +465,7 @@ function OwnAccountsInner() {
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => handleAddAsOwn(asset.instagramUsername)}
+                              onClick={() => handleAddAsOwn(asset)}
                               disabled={!!action}
                               className="text-violet-700 border-violet-200 hover:bg-violet-50 text-xs"
                             >

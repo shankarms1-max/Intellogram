@@ -152,17 +152,28 @@ export async function GET() {
       .map((p) => [p.linkedInstagramAccountId!, p])
   );
 
+  const connectedIgIds = new Set(connections.map((c) => c.instagramUserId));
+
   const assets = connections.map((conn) => {
     const ta = ownByIgId.get(conn.instagramUserId);
     const page = pageByIgId.get(conn.instagramUserId);
     return {
+      source: "instagram_connection" as const,
+      isAuthorized: true as const,
       connectionId: conn.id,
       instagramUserId: conn.instagramUserId,
       instagramUsername: conn.instagramUsername,
+      displayName: ta?.displayName ?? null,
+      profilePictureUrl: ta?.profilePictureUrl ?? null,
+      followersCount: ta?.followersCount ?? null,
       status: conn.status,
       tokenExpiresAt: conn.tokenExpiresAt,
       scopes: conn.scopes,
       updatedAt: conn.updatedAt,
+      // isTrackedAsOwn: true when an own-type TrackedAccount exists for this connection
+      isTrackedAsOwn: ta !== undefined,
+      trackedAccountId: ta?.id ?? null,
+      // Full tracked account for detailed display
       trackedAccount: ta
         ? {
             id: ta.id,
@@ -188,8 +199,54 @@ export async function GET() {
     };
   });
 
-  // Orphan pages: linked IG account has no matching connection
-  const connectedIgIds = new Set(connections.map((c) => c.instagramUserId));
+  // Facebook Page-sourced assets: pages with a linked IG account that has no direct connection.
+  // These are still authorized (discovered via Meta OAuth) and can be tracked as own.
+  const pageOnlyAssets = pages
+    .filter((p) => p.linkedInstagramAccountId && !connectedIgIds.has(p.linkedInstagramAccountId))
+    .map((p) => {
+      const igId = p.linkedInstagramAccountId!;
+      const ta = ownByIgId.get(igId);
+      return {
+        source: "facebook_page" as const,
+        isAuthorized: true as const,
+        connectionId: null,
+        instagramUserId: igId,
+        instagramUsername: p.linkedInstagramUsername ?? igId,
+        displayName: ta?.displayName ?? null,
+        profilePictureUrl: ta?.profilePictureUrl ?? null,
+        followersCount: ta?.followersCount ?? null,
+        status: "active" as const,
+        tokenExpiresAt: null,
+        scopes: [],
+        updatedAt: p.updatedAt,
+        isTrackedAsOwn: ta !== undefined,
+        trackedAccountId: ta?.id ?? null,
+        trackedAccount: ta
+          ? {
+              id: ta.id,
+              username: ta.username,
+              displayName: ta.displayName,
+              profilePictureUrl: ta.profilePictureUrl,
+              followersCount: ta.followersCount,
+              mediaCount: ta.mediaCount,
+              status: ta.status,
+              lastSyncedAt: ta.lastSyncedAt,
+              isActive: ta.isActive,
+            }
+          : null,
+        facebookPage: {
+          id: p.id,
+          facebookPageId: p.facebookPageId,
+          name: p.name,
+          pictureUrl: p.pictureUrl,
+          category: p.category,
+        },
+      };
+    });
+
+  const allAssets = [...assets, ...pageOnlyAssets];
+
+  // Orphan pages listed separately (backward compat)
   const orphanPages = pages
     .filter((p) => p.linkedInstagramAccountId && !connectedIgIds.has(p.linkedInstagramAccountId))
     .map((p) => ({
@@ -220,7 +277,7 @@ export async function GET() {
   }));
 
   return NextResponse.json({
-    assets,
+    assets: allAssets,
     ownAccounts: ownAccountsResponse,
     orphanPages,
     _diag: diag,
