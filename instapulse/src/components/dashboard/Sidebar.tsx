@@ -32,7 +32,8 @@ const navGroups = [
     label: "Meta Intelligence",
     items: [
       { href: "/dashboard/meta-overview", label: "Overview", icon: Globe2 },
-      { href: "/dashboard/accounts", label: "Instagram", icon: Aperture },
+      { href: "/dashboard/own-accounts", label: "Own Accounts", icon: Users },
+      { href: "/dashboard/accounts", label: "All Accounts", icon: Aperture },
       { href: "/dashboard/facebook-pages", label: "Facebook Pages", icon: Globe },
       { href: "/dashboard/competitor", label: "Competitors", icon: Swords },
     ],

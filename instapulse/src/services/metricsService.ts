@@ -17,7 +17,7 @@ export async function getWorkspaceSummary(workspaceId: string, days = 30) {
 
   const ownAccounts = accounts.filter((a) => a.accountType === "own");
   const competitorAccounts = accounts.filter((a) => a.accountType === "competitor");
-  const totalFollowers = accounts.reduce((sum, a) => sum + (a.followersCount || 0), 0);
+  const totalFollowers = ownAccounts.reduce((sum, a) => sum + (a.followersCount || 0), 0);
   const totalLikes = media.reduce((sum, m) => sum + (m.likeCount || 0), 0);
   const totalComments = media.reduce((sum, m) => sum + (m.commentsCount || 0), 0);
   const totalViews = media.reduce((sum, m) => sum + (m.viewsCount || 0), 0);

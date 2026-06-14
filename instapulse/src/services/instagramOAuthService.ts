@@ -80,7 +80,7 @@ export async function handleOAuthCallback(
   let connected = 0;
 
   for (const account of igAccounts) {
-    await db.instagramConnection.upsert({
+    const connection = await db.instagramConnection.upsert({
       where: {
         workspaceId_instagramUserId: { workspaceId, instagramUserId: account.id },
       },
@@ -108,6 +108,7 @@ export async function handleOAuthCallback(
       where: { workspaceId_username: { workspaceId, username: account.username } },
       update: {
         instagramUserId: account.id,
+        connectionId: connection.id,
         displayName: account.name,
         profilePictureUrl: account.profile_picture_url,
         biography: account.biography,
@@ -122,6 +123,7 @@ export async function handleOAuthCallback(
       create: {
         workspaceId,
         instagramUserId: account.id,
+        connectionId: connection.id,
         username: account.username,
         displayName: account.name,
         profilePictureUrl: account.profile_picture_url,

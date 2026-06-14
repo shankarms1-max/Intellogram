@@ -151,8 +151,9 @@ model InstagramConnection {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trackedAccounts TrackedAccount[]
 
   @@unique([workspaceId, instagramUserId])
   @@index([workspaceId])
@@ -179,6 +180,7 @@ model TrackedAccount {
   id                String        @id @default(cuid())
   workspaceId       String
   instagramUserId   String?
+  connectionId      String?
   username          String
   displayName       String?
   profilePictureUrl String?
@@ -196,7 +198,8 @@ model TrackedAccount {
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
-  workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace        Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  connection       InstagramConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
   accountSnapshots AccountSnapshot[]
   mediaItems       MediaItem[]
 

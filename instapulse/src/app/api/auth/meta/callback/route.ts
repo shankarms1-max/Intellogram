@@ -69,7 +69,17 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  // When multiple accounts are discovered, redirect to own-accounts page so
+  // the user can choose which ones to keep as own. Single-account users get
+  // the existing connect success screen (backward compat).
+  const accountsConnected = result.accountsConnected ?? 0;
+  if (accountsConnected > 1) {
+    return NextResponse.redirect(
+      `${baseUrl}/dashboard/own-accounts?new_connection=true&connected=${accountsConnected}`
+    );
+  }
+
   return NextResponse.redirect(
-    `${baseUrl}/dashboard/connect?success=true&connected=${result.accountsConnected ?? 0}`
+    `${baseUrl}/dashboard/connect?success=true&connected=${accountsConnected}`
   );
 }
