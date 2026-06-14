@@ -40,11 +40,21 @@ export async function syncOwnAccount(
     },
   });
 
-  let connection = account.instagramUserId
+  // Resolution order:
+  //   1. connectionId FK (set by OAuth for new accounts) — fastest, most precise
+  //   2. instagramUserId match (works for all pre-existing rows, connectionId = null)
+  //   3. workspace-wide fallback (stale/migrated data safety net)
+  let connection = account.connectionId
     ? await db.instagramConnection.findFirst({
-        where: { workspaceId, instagramUserId: account.instagramUserId, status: "active" },
+        where: { id: account.connectionId, workspaceId, status: "active" },
       })
     : null;
+
+  if (!connection && account.instagramUserId) {
+    connection = await db.instagramConnection.findFirst({
+      where: { workspaceId, instagramUserId: account.instagramUserId, status: "active" },
+    });
+  }
 
   // Fallback: if lookup by instagramUserId failed (e.g. stale Facebook user ID stored),
   // try any active connection in the workspace.

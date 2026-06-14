@@ -104,11 +104,11 @@ export async function handleOAuthCallback(
       },
     });
 
-    await db.trackedAccount.upsert({
+    // Upsert core TrackedAccount fields (always safe — no connectionId here).
+    const trackedAccount = await db.trackedAccount.upsert({
       where: { workspaceId_username: { workspaceId, username: account.username } },
       update: {
         instagramUserId: account.id,
-        connectionId: connection.id,
         displayName: account.name,
         profilePictureUrl: account.profile_picture_url,
         biography: account.biography,
@@ -123,7 +123,6 @@ export async function handleOAuthCallback(
       create: {
         workspaceId,
         instagramUserId: account.id,
-        connectionId: connection.id,
         username: account.username,
         displayName: account.name,
         profilePictureUrl: account.profile_picture_url,
@@ -136,6 +135,18 @@ export async function handleOAuthCallback(
         status: "active",
       },
     });
+
+    // Backfill connectionId as a separate non-fatal step. If the column doesn't
+    // exist yet in the production DB (migration pending), this silently no-ops
+    // and sync continues to work via the instagramUserId fallback.
+    try {
+      await db.trackedAccount.update({
+        where: { id: trackedAccount.id },
+        data: { connectionId: connection.id },
+      });
+    } catch {
+      // Column not yet migrated in this environment — safe to ignore.
+    }
 
     connected++;
   }
