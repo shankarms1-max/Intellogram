@@ -58,8 +58,8 @@ interface TrackedAccount {
 
 type AccountTypeFilter = "all" | "own" | "competitor" | "influencer" | "brand" | "other";
 
+// "own" is intentionally excluded — own accounts must come from Meta OAuth discovery
 const ACCOUNT_TYPE_OPTIONS = [
-  { value: "own", label: "Own" },
   { value: "competitor", label: "Competitor" },
   { value: "influencer", label: "Influencer" },
   { value: "brand", label: "Brand" },
@@ -413,7 +413,12 @@ export default function AccountsPage() {
           <DialogHeader>
             <DialogTitle>Add Account</DialogTitle>
             <DialogDescription>
-              Add an Instagram account to track. Enter the username and select its type.
+              Add a public Instagram account to track as a competitor, influencer, or brand.
+              Own accounts must come from your connected Meta assets —{" "}
+              <a href="/dashboard/own-accounts" className="underline">
+                manage them on the Own Accounts page
+              </a>
+              .
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleAdd} className="space-y-4">

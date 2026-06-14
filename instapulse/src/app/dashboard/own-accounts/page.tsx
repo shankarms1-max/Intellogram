@@ -234,6 +234,24 @@ function OwnAccountsInner() {
     }
   }
 
+  async function handleMoveToCompetitor(accountId: string, key: string) {
+    setAction(key, "moving");
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/accounts/${accountId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountType: "competitor" }),
+      });
+      if (!res.ok) throw new Error("Failed to move account");
+      await fetchData();
+    } catch (e: unknown) {
+      setActionError(e instanceof Error ? e.message : "Could not move account");
+    } finally {
+      setAction(key, null);
+    }
+  }
+
   async function handleSync(accountId: string, key: string) {
     setAction(key, "syncing");
     setActionError(null);
@@ -268,8 +286,10 @@ function OwnAccountsInner() {
   const assetsWithOwn = assets.filter((a) => a.trackedAccount !== null);
   // Connections that have no own account yet
   const assetsWithoutOwn = assets.filter((a) => a.trackedAccount === null && a.status === "active");
-  // Own accounts with no connection (pre-connectionId data)
-  const ownWithoutConnection = ownAccounts.filter((a) => !a.hasConnection);
+  // Own accounts not discoverable from any Meta OAuth connection — unauthorized
+  const unauthorizedOwnAccounts = ownAccounts.filter((a) => !a.hasConnection);
+  // Authorized own accounts (have matching OAuth connection)
+  const authorizedOwnAccounts = ownAccounts.filter((a) => a.hasConnection);
 
   // ─── Render ──────────────────────────────────────────────────────────────
 
@@ -471,19 +491,19 @@ function OwnAccountsInner() {
             </CardHeader>
             <CardContent className="space-y-3">
 
-              {/* Warning for pre-connectionId accounts */}
-              {ownWithoutConnection.length > 0 && (
-                <div className="flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2">
-                  <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
-                  <p className="text-xs text-amber-700">
-                    {ownWithoutConnection.length > 1
-                      ? `${ownWithoutConnection.length} accounts were`
-                      : "1 account was"}{" "}
-                    tracked before OAuth connection linking was added. Sync still works.{" "}
+              {/* Unauthorized own accounts warning */}
+              {unauthorizedOwnAccounts.length > 0 && (
+                <div className="flex items-start gap-2 rounded-md bg-red-50 border border-red-200 px-3 py-2">
+                  <AlertTriangle className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />
+                  <p className="text-xs text-red-700">
+                    {unauthorizedOwnAccounts.length > 1
+                      ? `${unauthorizedOwnAccounts.length} accounts are`
+                      : "1 account is"}{" "}
+                    not linked to any Meta OAuth connection. Own accounts must come from your connected Meta assets.{" "}
                     <a href="/dashboard/connect" className="underline">
                       Reconnect Meta
                     </a>{" "}
-                    to link them to an active OAuth connection.
+                    to authorize, or move these to competitors using the button below.
                   </p>
                 </div>
               )}
@@ -528,11 +548,11 @@ function OwnAccountsInner() {
                                 <Star className="h-3 w-3" /> Primary
                               </Badge>
                             )}
-                            {!ta.hasConnection && (
-                              <Badge variant="outline" className="bg-gray-50 text-gray-500 border-gray-200 text-xs">
-                                No connection link
+                            {!ta.hasConnection ? (
+                              <Badge variant="outline" className="bg-red-50 text-red-600 border-red-200 text-xs gap-1">
+                                <AlertTriangle className="h-3 w-3" /> Needs authorization
                               </Badge>
-                            )}
+                            ) : null}
                           </div>
                           <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
                             {ta.followersCount != null && (
@@ -545,41 +565,75 @@ function OwnAccountsInner() {
                           </div>
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
-                          {!isPrimary && ta.instagramUserId && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleSetPrimary(ta.instagramUserId!)}
-                              className="text-xs text-yellow-700 border-yellow-200 hover:bg-yellow-50"
-                              title="Set as primary account for competitor discovery"
-                            >
-                              <StarOff className="h-3.5 w-3.5" />
-                              Set Primary
-                            </Button>
+                          {!ta.hasConnection ? (
+                            /* Unauthorized: show Move to Competitor and reconnect hint */
+                            <>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleMoveToCompetitor(ta.id, key)}
+                                disabled={!!action}
+                                className="text-xs text-blue-700 border-blue-200 hover:bg-blue-50"
+                                title="Move to competitor tracking"
+                              >
+                                {action === "moving"
+                                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  : <RotateCw className="h-3.5 w-3.5" />}
+                                Move to Competitor
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleRemoveFromOwn(ta.id, key)}
+                                disabled={!!action}
+                                className="text-red-600 border-red-200 hover:bg-red-50 text-xs"
+                              >
+                                {action === "removing"
+                                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  : <MinusCircle className="h-3.5 w-3.5" />}
+                                Remove
+                              </Button>
+                            </>
+                          ) : (
+                            /* Authorized: full action set */
+                            <>
+                              {!isPrimary && ta.instagramUserId && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleSetPrimary(ta.instagramUserId!)}
+                                  className="text-xs text-yellow-700 border-yellow-200 hover:bg-yellow-50"
+                                  title="Set as primary account for competitor discovery"
+                                >
+                                  <StarOff className="h-3.5 w-3.5" />
+                                  Set Primary
+                                </Button>
+                              )}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleSync(ta.id, key)}
+                                disabled={!!action}
+                                title="Sync now"
+                              >
+                                {action === "syncing"
+                                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  : <RotateCw className="h-3.5 w-3.5" />}
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleRemoveFromOwn(ta.id, key)}
+                                disabled={!!action}
+                                className="text-red-600 border-red-200 hover:bg-red-50 text-xs"
+                              >
+                                {action === "removing"
+                                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  : <MinusCircle className="h-3.5 w-3.5" />}
+                                Remove
+                              </Button>
+                            </>
                           )}
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleSync(ta.id, key)}
-                            disabled={!!action}
-                            title="Sync now"
-                          >
-                            {action === "syncing"
-                              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              : <RotateCw className="h-3.5 w-3.5" />}
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleRemoveFromOwn(ta.id, key)}
-                            disabled={!!action}
-                            className="text-red-600 border-red-200 hover:bg-red-50 text-xs"
-                          >
-                            {action === "removing"
-                              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              : <MinusCircle className="h-3.5 w-3.5" />}
-                            Remove
-                          </Button>
                         </div>
                       </div>
                     </div>
@@ -633,13 +687,13 @@ function OwnAccountsInner() {
                 </div>
               )}
 
-              {ownAccounts.filter((a) => a.instagramUserId).length > 0 && (
+              {authorizedOwnAccounts.filter((a) => a.instagramUserId).length > 0 && (
                 <>
                   <Separator />
                   <div className="space-y-2">
                     <p className="text-xs font-medium text-muted-foreground">Change primary account</p>
                     <div className="space-y-1.5">
-                      {ownAccounts.filter((a) => a.instagramUserId).map((ta) => {
+                      {authorizedOwnAccounts.filter((a) => a.instagramUserId).map((ta) => {
                         const isPrimary = primary?.instagramUserId === ta.instagramUserId;
                         return (
                           <div

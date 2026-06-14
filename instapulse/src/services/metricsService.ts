@@ -5,7 +5,7 @@ import { subDays } from "date-fns";
 export async function getWorkspaceSummary(workspaceId: string, days = 30) {
   const since = subDays(new Date(), days);
 
-  const [accounts, media] = await Promise.all([
+  const [accounts, media, activeConnections] = await Promise.all([
     db.trackedAccount.findMany({
       where: { workspaceId, isActive: true },
     }),
@@ -13,9 +13,18 @@ export async function getWorkspaceSummary(workspaceId: string, days = 30) {
       where: { workspaceId, timestamp: { gte: since } },
       include: { trackedAccount: true },
     }),
+    db.instagramConnection.findMany({
+      where: { workspaceId, status: "active" },
+      select: { instagramUserId: true },
+    }),
   ]);
 
-  const ownAccounts = accounts.filter((a) => a.accountType === "own");
+  // Only count own accounts that have an active OAuth connection.
+  // Accounts added without Meta authorization are excluded from totals.
+  const authorizedIgIds = new Set(activeConnections.map((c) => c.instagramUserId));
+  const ownAccounts = accounts.filter(
+    (a) => a.accountType === "own" && a.instagramUserId && authorizedIgIds.has(a.instagramUserId)
+  );
   const competitorAccounts = accounts.filter((a) => a.accountType === "competitor");
   const totalFollowers = ownAccounts.reduce((sum, a) => sum + (a.followersCount || 0), 0);
   const totalLikes = media.reduce((sum, m) => sum + (m.likeCount || 0), 0);

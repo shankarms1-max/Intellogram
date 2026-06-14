@@ -62,6 +62,16 @@ export function validateCsvRows(rows: Record<string, string | undefined>[]): Csv
       continue;
     }
 
+    if (accountType === "own") {
+      errors.push({
+        row: rowNum,
+        field: "account_type",
+        message:
+          "Own accounts cannot be imported via CSV. Connect your Meta account to discover and track your own Instagram accounts.",
+      });
+      continue;
+    }
+
     const fetchLimitStr = row.fetch_limit || "50";
     const fetchLimit = parseInt(fetchLimitStr, 10);
     if (isNaN(fetchLimit) || fetchLimit < 1 || fetchLimit > 500) {

@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { getOrCreateDefaultWorkspace } from "@/lib/workspace";
 import { db } from "@/lib/db";
+import { isAuthorizedOwnAccount } from "@/lib/ownAccountAuth";
 
 async function getWorkspaceAccount(accountId: string, workspaceId: string) {
   return db.trackedAccount.findFirst({
@@ -30,6 +31,24 @@ export async function PATCH(
 
   const body = await request.json();
   const { accountType, displayName, notes, fetchLimit, isActive } = body;
+
+  // Block promotion to "own" unless the account is discoverable from Meta OAuth
+  if (accountType === "own" && existing.accountType !== "own") {
+    const authorized = await isAuthorizedOwnAccount(workspace.id, {
+      username: existing.username,
+      instagramUserId: existing.instagramUserId ?? undefined,
+    });
+    if (!authorized) {
+      return NextResponse.json(
+        {
+          error:
+            "Own accounts must be selected from connected Meta assets. " +
+            "Add public profiles as competitors instead.",
+        },
+        { status: 403 }
+      );
+    }
+  }
 
   const account = await db.trackedAccount.update({
     where: { id },

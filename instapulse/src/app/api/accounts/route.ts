@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { getOrCreateDefaultWorkspace } from "@/lib/workspace";
 import { db } from "@/lib/db";
 import { normalizeInstagramUsername } from "@/services/instagramApiClient";
+import { isAuthorizedOwnAccount } from "@/lib/ownAccountAuth";
 
 export async function GET(request: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -57,6 +58,21 @@ export async function POST(request: NextRequest) {
       { error: "Invalid Instagram username. Use letters, numbers, dots, or underscores (max 30 chars)." },
       { status: 400 }
     );
+  }
+
+  // Block manual creation of own accounts — must come from Meta OAuth discovery
+  if (accountType === "own") {
+    const authorized = await isAuthorizedOwnAccount(workspace.id, { username: normalizedUsername });
+    if (!authorized) {
+      return NextResponse.json(
+        {
+          error:
+            "Own accounts must be selected from connected Meta assets. " +
+            "Add public profiles as competitors instead.",
+        },
+        { status: 403 }
+      );
+    }
   }
 
   const existing = await db.trackedAccount.findUnique({

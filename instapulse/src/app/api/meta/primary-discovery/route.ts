@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "instagramUserId is required" }, { status: 400 });
   }
 
-  // Verify the IG account belongs to this workspace (own account only)
+  // Verify the IG account is tracked as own AND has an active OAuth connection
   const ta = await db.trackedAccount.findFirst({
     where: { workspaceId: workspace.id, instagramUserId, accountType: "own" },
   });
@@ -77,6 +77,21 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       { error: "No own account with that Instagram User ID found in this workspace" },
       { status: 404 }
+    );
+  }
+
+  const conn = await db.instagramConnection.findFirst({
+    where: { workspaceId: workspace.id, instagramUserId, status: "active" },
+    select: { id: true },
+  });
+  if (!conn) {
+    return NextResponse.json(
+      {
+        error:
+          "Primary discovery account must have an active Meta OAuth connection. " +
+          "Reconnect Meta to authorize this account.",
+      },
+      { status: 403 }
     );
   }
 
